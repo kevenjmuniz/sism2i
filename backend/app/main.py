@@ -334,7 +334,7 @@ def clients(
     estado: Optional[str] = None,
     familia: Optional[str] = None,
     status: Optional[str] = None,
-    limit: int = Query(50, le=200),
+    limit: int = Query(1000, le=1000),
 ):
     if supabase_api.enabled():
         filters = {

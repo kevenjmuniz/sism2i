@@ -106,7 +106,7 @@ export function Clients({ query, refresh }) {
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState(null);
   const list = useData(
-    `/api/clients?${query}&q=${encodeURIComponent(q)}&limit=200`,
+    `/api/clients?${query}&q=${encodeURIComponent(q)}&limit=1000`,
     [query, q, refresh]
   );
 
