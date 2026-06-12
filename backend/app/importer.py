@@ -36,7 +36,9 @@ def normalize_row(row):
 
 def is_supplier_row(row):
     tags = f"{row.get('Tags', '')} {row.get('Tag - Fornecedor', '')}".lower()
-    return "fornecedor" in tags or row.get("Tag - Fornecedor", "").strip().lower() in {"sim", "s", "true", "1"}
+    is_client = "cliente" in tags or row.get("Tag - Cliente", "").strip().lower() in {"sim", "s", "true", "1"}
+    is_supplier = "fornecedor" in tags or row.get("Tag - Fornecedor", "").strip().lower() in {"sim", "s", "true", "1"}
+    return is_supplier and not is_client
 
 
 def parse_number(value):
