@@ -1,8 +1,13 @@
 from pathlib import Path
 from decimal import Decimal
+import hashlib
+import hmac
+import os
+import secrets
+import time
 from typing import Optional
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -25,6 +30,78 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+AUTH_USERNAME = os.getenv("AUTH_USERNAME", "admin")
+AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "admin")
+AUTH_SECRET = os.getenv("AUTH_SECRET") or os.getenv("SUPABASE_PUBLISHABLE_KEY") or secrets.token_urlsafe(32)
+SESSION_COOKIE = "historico_session"
+SESSION_TTL_SECONDS = 60 * 60 * 12
+
+
+def make_session_token(username):
+    expires = int(time.time()) + SESSION_TTL_SECONDS
+    payload = f"{username}:{expires}"
+    signature = hmac.new(AUTH_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}:{signature}"
+
+
+def verify_session_token(token):
+    if not token:
+        return False
+    try:
+        username, expires_text, signature = token.rsplit(":", 2)
+        expires = int(expires_text)
+    except ValueError:
+        return False
+    if expires < int(time.time()) or username != AUTH_USERNAME:
+        return False
+    payload = f"{username}:{expires}"
+    expected = hmac.new(AUTH_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature, expected)
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    public_paths = (
+        "/api/auth/login",
+        "/api/auth/me",
+        "/api/auth/logout",
+        "/favicon.ico",
+    )
+    if path.startswith("/api/") and path not in public_paths:
+        if not verify_session_token(request.cookies.get(SESSION_COOKIE)):
+            return Response('{"detail":"Login obrigatório."}', status_code=401, media_type="application/json")
+    return await call_next(request)
+
+
+@app.post("/api/auth/login")
+async def login(request: Request, response: Response):
+    data = await request.json()
+    username = str(data.get("username", ""))
+    password = str(data.get("password", ""))
+    if not (hmac.compare_digest(username, AUTH_USERNAME) and hmac.compare_digest(password, AUTH_PASSWORD)):
+        raise HTTPException(status_code=401, detail="Usuário ou senha inválidos.")
+    response.set_cookie(
+        SESSION_COOKIE,
+        make_session_token(username),
+        httponly=True,
+        samesite="lax",
+        max_age=SESSION_TTL_SECONDS,
+    )
+    return {"authenticated": True, "username": username}
+
+
+@app.get("/api/auth/me")
+def me(request: Request):
+    valid = verify_session_token(request.cookies.get(SESSION_COOKIE))
+    return {"authenticated": valid, "username": AUTH_USERNAME if valid else None}
+
+
+@app.post("/api/auth/logout")
+def logout(response: Response):
+    response.delete_cookie(SESSION_COOKIE)
+    return {"authenticated": False}
 
 
 @app.on_event("startup")

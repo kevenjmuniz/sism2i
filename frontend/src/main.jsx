@@ -18,7 +18,7 @@ import { Products } from "./pages/Products";
 import { Orders } from "./pages/Orders";
 import { ImportCsv } from "./pages/ImportCsv";
 import { useData, clearDataCache } from "./hooks";
-import { qs } from "./utils";
+import { api, qs } from "./utils";
 import "./styles.css";
 
 const blankFilters = {
@@ -42,12 +42,19 @@ const nav = [
 ];
 
 function App() {
+  const [auth, setAuth] = useState({ checking: true, authenticated: false, error: "" });
   const [page, setPage] = useState("dashboard");
   const [draftFilters, setDraftFilters] = useState(blankFilters);
   const [filters, setFilters] = useState(blankFilters);
   const [refresh, setRefresh] = useState(0);
 
-  const meta = useData(`/api/meta`, [refresh]);
+  React.useEffect(() => {
+    api("/api/auth/me")
+      .then((data) => setAuth({ checking: false, authenticated: data.authenticated, error: "" }))
+      .catch(() => setAuth({ checking: false, authenticated: false, error: "" }));
+  }, []);
+
+  const meta = useData(auth.authenticated ? `/api/meta` : "", [refresh, auth.authenticated]);
   const query = useMemo(() => qs(filters), [filters]);
 
   function handleImportDone() {
@@ -62,6 +69,14 @@ function App() {
   function handleClear() {
     setDraftFilters(blankFilters);
     setFilters(blankFilters);
+  }
+
+  if (auth.checking) {
+    return <div className="loginPage"><section className="loginBox"><strong>Carregando...</strong></section></div>;
+  }
+
+  if (!auth.authenticated) {
+    return <Login onLogin={() => setAuth({ checking: false, authenticated: true, error: "" })} />;
   }
 
   return (
@@ -93,6 +108,7 @@ function App() {
             <h1>{nav.find(([id]) => id === page)?.[2]}</h1>
             <p>Priorize clientes, entenda frequência de compra e recupere oportunidades.</p>
           </div>
+          <button className="secondaryAction" onClick={async () => { await api("/api/auth/logout", { method: "POST" }); clearDataCache(); setAuth({ checking: false, authenticated: false, error: "" }); }}>Sair</button>
         </header>
 
         {page !== "importar" && (
@@ -112,6 +128,50 @@ function App() {
         {page === "pedidos" && <Orders query={query} refresh={refresh} />}
         {page === "importar" && <ImportCsv onDone={handleImportDone} />}
       </main>
+    </div>
+  );
+}
+
+function Login({ onLogin }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function submit(event) {
+    event?.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      await api("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      clearDataCache();
+      onLogin();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="loginPage">
+      <form className="loginBox" onSubmit={submit}>
+        <div className="brand loginBrand">
+          <PackageSearch size={28} />
+          <div>
+            <strong>Comercial</strong>
+            <span>Acesso ao sistema</span>
+          </div>
+        </div>
+        <label>Usuário<input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus /></label>
+        <label>Senha<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>
+        <button className="primaryAction" disabled={loading}>{loading ? "Entrando..." : "Entrar"}</button>
+        {error && <p className="loginError">{error}</p>}
+      </form>
     </div>
   );
 }

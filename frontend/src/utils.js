@@ -23,7 +23,7 @@ export function qs(filters) {
 }
 
 export async function api(path, options) {
-  const res = await fetch(`${API}${path}`, options);
+  const res = await fetch(`${API}${path}`, { credentials: "include", ...(options || {}) });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Não foi possível carregar os dados.");
   return res.json();
 }

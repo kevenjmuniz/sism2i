@@ -188,9 +188,24 @@ SUPABASE_REST_MODE=true
 SUPABASE_URL=https://nrbsmyudmezslzolmakj.supabase.co
 SUPABASE_PUBLISHABLE_KEY=sua_publishable_key
 SUPABASE_SERVICE_ROLE_KEY=sua_service_role_key_opcional_para_importar
+AUTH_USERNAME=admin
+AUTH_PASSWORD=troque-esta-senha
+AUTH_SECRET=troque-este-segredo-por-um-texto-longo
 ```
 
 Para leitura, a publishable key pode funcionar se as policies permitirem. Para importar CSV, limpar tabelas e gravar dados pelo backend, use `SUPABASE_SERVICE_ROLE_KEY` ou policies que permitam escrita.
+
+## Login
+
+O sistema tem login simples por usuario e senha definidos no `backend/.env`.
+
+Variaveis:
+
+- `AUTH_USERNAME`
+- `AUTH_PASSWORD`
+- `AUTH_SECRET`
+
+Se nao forem configuradas, o backend usa `admin` / `admin` como padrao. Em producao, sempre altere essas variaveis e recrie o container.
 
 ## Instalar
 

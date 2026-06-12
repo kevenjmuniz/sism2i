@@ -14,6 +14,10 @@ export function useData(path, deps = []) {
   });
 
   useEffect(() => {
+    if (!path) {
+      setState({ loading: false, data: null, error: "" });
+      return;
+    }
     let active = true;
     const hit = cache.get(path);
     if (hit) {
