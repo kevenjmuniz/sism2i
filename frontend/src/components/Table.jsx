@@ -6,14 +6,25 @@ const PAGE_SIZE = 50;
 
 export function Table({ title, rows = [], columns, onRowClick, filename }) {
   const [page, setPage] = useState(0);
+  const [sort, setSort] = useState({ key: null, direction: "desc" });
 
   useEffect(() => {
     setPage(0);
-  }, [rows]);
+  }, [rows, sort]);
 
-  const total = rows.length;
+  const sortedRows = sort.key
+    ? [...rows].sort((a, b) => compareValues(a[sort.key], b[sort.key], sort.direction))
+    : rows;
+  const total = sortedRows.length;
   const pages = Math.ceil(total / PAGE_SIZE);
-  const pageRows = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const pageRows = sortedRows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+  function handleSort(key) {
+    setSort((current) => {
+      if (current.key !== key) return { key, direction: "desc" };
+      return { key, direction: current.direction === "desc" ? "asc" : "desc" };
+    });
+  }
 
   return (
     <section className="panel">
@@ -36,8 +47,13 @@ export function Table({ title, rows = [], columns, onRowClick, filename }) {
         <table>
           <thead>
             <tr>
-              {columns.map(([, label]) => (
-                <th key={label}>{label}</th>
+              {columns.map(([key, label]) => (
+                <th key={label}>
+                  <button className="sortHeader" onClick={() => handleSort(key)} title="Ordenar">
+                    {label}
+                    <span>{sort.key === key ? (sort.direction === "desc" ? "↓" : "↑") : "↕"}</span>
+                  </button>
+                </th>
               ))}
             </tr>
           </thead>
@@ -76,4 +92,27 @@ export function Table({ title, rows = [], columns, onRowClick, filename }) {
       )}
     </section>
   );
+}
+
+function compareValues(a, b, direction) {
+  const dir = direction === "asc" ? 1 : -1;
+  const aEmpty = a === null || a === undefined || a === "";
+  const bEmpty = b === null || b === undefined || b === "";
+  if (aEmpty && bEmpty) return 0;
+  if (aEmpty) return 1;
+  if (bEmpty) return -1;
+
+  const aNumber = Number(a);
+  const bNumber = Number(b);
+  if (!Number.isNaN(aNumber) && !Number.isNaN(bNumber)) {
+    return (aNumber - bNumber) * dir;
+  }
+
+  const aTime = Date.parse(a);
+  const bTime = Date.parse(b);
+  if (!Number.isNaN(aTime) && !Number.isNaN(bTime)) {
+    return (aTime - bTime) * dir;
+  }
+
+  return String(a).localeCompare(String(b), "pt-BR", { sensitivity: "base" }) * dir;
 }

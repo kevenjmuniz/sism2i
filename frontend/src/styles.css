@@ -433,6 +433,33 @@ th {
   text-transform: uppercase;
 }
 
+.sortHeader {
+  width: 100%;
+  min-height: 26px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0;
+  text-align: left;
+  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.sortHeader span {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.sortHeader:hover {
+  color: #2563eb;
+}
+
 tr.clickable {
   cursor: pointer;
 }
