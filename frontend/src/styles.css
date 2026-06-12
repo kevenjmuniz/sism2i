@@ -44,6 +44,14 @@ select {
   gap: 12px;
 }
 
+.brandLogo {
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
 .brand strong,
 .brand span {
   display: block;
@@ -542,6 +550,11 @@ tr.clickable:hover td {
 .loginBrand {
   color: #172033;
   margin-bottom: 4px;
+}
+
+.loginBrand .brandLogo {
+  width: 64px;
+  height: 64px;
 }
 
 .loginBrand span {

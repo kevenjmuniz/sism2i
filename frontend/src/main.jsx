@@ -5,7 +5,6 @@ import {
   Boxes,
   FileUp,
   LayoutDashboard,
-  PackageSearch,
   ReceiptText,
   UsersRound,
 } from "lucide-react";
@@ -19,6 +18,7 @@ import { Orders } from "./pages/Orders";
 import { ImportCsv } from "./pages/ImportCsv";
 import { useData, clearDataCache } from "./hooks";
 import { api, qs } from "./utils";
+import logoM2i from "./assets/m2i-logo.png";
 import "./styles.css";
 
 const blankFilters = {
@@ -83,9 +83,9 @@ function App() {
     <div className="app">
       <aside className="sidebar">
         <div className="brand">
-          <PackageSearch size={28} />
+          <img className="brandLogo" src={logoM2i} alt="M2i Comercial" />
           <div>
-            <strong>Comercial</strong>
+            <strong>M2i Comercial</strong>
             <span>Pescados e frutos do mar</span>
           </div>
         </div>
@@ -161,9 +161,9 @@ function Login({ onLogin }) {
     <div className="loginPage">
       <form className="loginBox" onSubmit={submit}>
         <div className="brand loginBrand">
-          <PackageSearch size={28} />
+          <img className="brandLogo" src={logoM2i} alt="M2i Comercial" />
           <div>
-            <strong>Comercial</strong>
+            <strong>M2i Comercial</strong>
             <span>Acesso ao sistema</span>
           </div>
         </div>
