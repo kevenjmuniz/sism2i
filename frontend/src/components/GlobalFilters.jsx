@@ -1,5 +1,16 @@
 import React from "react";
 
+const periodOptions = [
+  ["30", "Ultimos 30 dias"],
+  ["60", "Ultimos 60 dias"],
+  ["90", "Ultimos 90 dias"],
+  ["180", "Ultimos 180 dias"],
+];
+
+function formatDate(date) {
+  return date.toISOString().slice(0, 10);
+}
+
 function Select({ label, value, options = [], onChange }) {
   return (
     <label>
@@ -19,6 +30,27 @@ function Select({ label, value, options = [], onChange }) {
 export function GlobalFilters({ filters, setFilters, meta, onApply, onClear }) {
   const update = (key, value) => setFilters((prev) => ({ ...prev, [key]: value }));
 
+  function updateDate(key, value) {
+    setFilters((prev) => ({ ...prev, periodPreset: "", [key]: value }));
+  }
+
+  function updatePeriodPreset(value) {
+    if (!value) {
+      update("periodPreset", "");
+      return;
+    }
+    const days = Number(value);
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - days);
+    setFilters((prev) => ({
+      ...prev,
+      periodPreset: value,
+      start: formatDate(start),
+      end: formatDate(end),
+    }));
+  }
+
   function handleKeyDown(e) {
     if (e.key === "Enter") onApply();
   }
@@ -26,11 +58,22 @@ export function GlobalFilters({ filters, setFilters, meta, onApply, onClear }) {
   return (
     <section className="filters" onKeyDown={handleKeyDown}>
       <label>
+        Atalho de periodo
+        <select value={filters.periodPreset} onChange={(e) => updatePeriodPreset(e.target.value)}>
+          <option value="">Personalizado</option>
+          {periodOptions.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
         Período inicial
         <input
           type="date"
           value={filters.start}
-          onChange={(e) => update("start", e.target.value)}
+          onChange={(e) => updateDate("start", e.target.value)}
         />
       </label>
       <label>
@@ -38,7 +81,7 @@ export function GlobalFilters({ filters, setFilters, meta, onApply, onClear }) {
         <input
           type="date"
           value={filters.end}
-          onChange={(e) => update("end", e.target.value)}
+          onChange={(e) => updateDate("end", e.target.value)}
         />
       </label>
       <Select

@@ -22,6 +22,7 @@ import logoM2i from "./assets/m2i-logo.png";
 import "./styles.css";
 
 const blankFilters = {
+  periodPreset: "",
   start: "",
   end: "",
   status: "",

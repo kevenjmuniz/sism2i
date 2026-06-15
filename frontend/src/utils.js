@@ -18,7 +18,9 @@ export function frequency(value) {
 
 export function qs(filters) {
   const params = new URLSearchParams();
-  Object.entries(filters).forEach(([key, value]) => value && params.set(key, value));
+  Object.entries(filters).forEach(([key, value]) => {
+    if (key !== "periodPreset" && value) params.set(key, value);
+  });
   return params.toString();
 }
 
