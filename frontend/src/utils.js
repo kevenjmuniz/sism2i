@@ -53,3 +53,37 @@ export function exportCsv(filename, rows, columns) {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+export function exportExcel(filename, rows, columns) {
+  const table = `
+    <table>
+      <thead>
+        <tr>${columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}</tr>
+      </thead>
+      <tbody>
+        ${rows
+          .map(
+            (row) =>
+              `<tr>${columns.map(([key]) => `<td>${escapeHtml(row[key] ?? "")}</td>`).join("")}</tr>`
+          )
+          .join("")}
+      </tbody>
+    </table>
+  `;
+  const html = `<!doctype html><html><head><meta charset="UTF-8"></head><body>${table}</body></html>`;
+  const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}

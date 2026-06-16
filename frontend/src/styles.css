@@ -272,6 +272,14 @@ select {
   font-weight: 400;
 }
 
+.exportActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .exportBtn {
   display: flex;
   align-items: center;

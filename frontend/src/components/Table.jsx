@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Download } from "lucide-react";
-import { exportCsv, number } from "../utils";
+import { Download, FileSpreadsheet } from "lucide-react";
+import { exportCsv, exportExcel, number } from "../utils";
 
 const PAGE_SIZE = 50;
 
@@ -33,14 +33,24 @@ export function Table({ title, rows = [], columns, onRowClick, filename }) {
           {title} <span className="rowCount">{number(total)}</span>
         </h2>
         {filename && (
-          <button
-            className="exportBtn"
-            title="Exportar CSV"
-            onClick={() => exportCsv(filename, rows, columns)}
-          >
-            <Download size={15} />
-            Exportar CSV
-          </button>
+          <div className="exportActions">
+            <button
+              className="exportBtn"
+              title="Exportar CSV"
+              onClick={() => exportCsv(filename, rows, columns)}
+            >
+              <Download size={15} />
+              Exportar CSV
+            </button>
+            <button
+              className="exportBtn"
+              title="Exportar Excel"
+              onClick={() => exportExcel(filename.replace(/\.csv$/i, ".xls"), rows, columns)}
+            >
+              <FileSpreadsheet size={15} />
+              Exportar Excel
+            </button>
+          </div>
         )}
       </div>
       <div className="tablewrap">
