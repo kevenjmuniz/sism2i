@@ -30,13 +30,22 @@ export async function api(path, options) {
   return res.json();
 }
 
+function exportValue(row, column) {
+  const [key, , format] = column;
+  const value = row[key] ?? "";
+  if (!format) return value;
+  const formatted = format(value, row);
+  const type = typeof formatted;
+  return type === "string" || type === "number" || type === "boolean" ? formatted : value;
+}
+
 export function exportCsv(filename, rows, columns) {
   const header = columns.map(([, label]) => `"${label}"`).join(",");
   const body = rows
     .map((row) =>
       columns
-        .map(([key]) => {
-          const val = row[key] ?? "";
+        .map((column) => {
+          const val = exportValue(row, column);
           const str = String(val);
           return str.includes(",") || str.includes('"') || str.includes("\n")
             ? `"${str.replace(/"/g, '""')}"`
@@ -72,7 +81,7 @@ export function exportExcel(filename, rows, columns) {
         ${rows
           .map(
             (row) =>
-              `<tr>${columns.map(([key]) => `<td>${escapeHtml(row[key] ?? "")}</td>`).join("")}</tr>`
+              `<tr>${columns.map((column) => `<td>${escapeHtml(exportValue(row, column))}</td>`).join("")}</tr>`
           )
           .join("")}
       </tbody>
