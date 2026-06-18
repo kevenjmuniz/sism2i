@@ -6,6 +6,7 @@ import time
 import httpx
 
 from . import supabase_api
+from .db import DATABASE_URL, psycopg
 
 _snapshot_cache: dict = {"data": None, "ts": 0.0}
 _CACHE_TTL = 300  # 5 minutos
@@ -93,6 +94,16 @@ def table(name, order=None):
     return data
 
 
+def postgres_table(name):
+    if not DATABASE_URL or psycopg is None:
+        return None
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT * FROM {name}")
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
 def invalidate_snapshot_cache():
     _snapshot_cache["data"] = None
     _snapshot_cache["ts"] = 0.0
@@ -102,7 +113,8 @@ def snapshot():
     now = time.time()
     if _snapshot_cache["data"] is not None and now - _snapshot_cache["ts"] < _CACHE_TTL:
         return _snapshot_cache["data"]
-    clientes = {row["id"]: row for row in table("clientes")}
+    clientes_rows = postgres_table("clientes") or table("clientes")
+    clientes = {row["id"]: row for row in clientes_rows}
     produtos = {row["id"]: row for row in table("produtos")}
     pedidos = {row["id"]: row for row in table("pedidos")}
     notas = {row["id"]: row for row in table("notas_fiscais")}
@@ -119,6 +131,22 @@ def match_text(value, term):
     return term.lower() in str(value or "").lower()
 
 
+def client_document(cliente):
+    return cliente.get("cnpj_cpf") or cliente.get("cnpj") or cliente.get("CNPJ/CPF") or cliente.get("CNPJ / CPF")
+
+
+def has_valid_client(cliente):
+    return bool(
+        cliente
+        and cliente.get("id")
+        and (
+            cliente.get("razao_social")
+            or cliente.get("nome_fantasia")
+            or client_document(cliente)
+        )
+    )
+
+
 def item_rows(filters=None):
     filters = filters or {}
     clientes, produtos, pedidos, notas, itens = snapshot()
@@ -130,6 +158,9 @@ def item_rows(filters=None):
         nota = notas.get(item.get("nota_fiscal_id")) or {}
         data = nota.get("data_faturamento") or pedido.get("data_faturamento") or pedido.get("data_inclusao")
 
+        if not has_valid_client(cliente):
+            continue
+
         if filters.get("start") and (not data or data < filters["start"]):
             continue
         if filters.get("end") and (not data or data > filters["end"]):
@@ -137,7 +168,7 @@ def item_rows(filters=None):
         if filters.get("cliente") and not (
             match_text(cliente.get("razao_social"), filters["cliente"])
             or match_text(cliente.get("nome_fantasia"), filters["cliente"])
-            or match_text(cliente.get("cnpj_cpf"), filters["cliente"])
+            or match_text(client_document(cliente), filters["cliente"])
         ):
             continue
         if filters.get("cliente_id") and int(cliente.get("id") or 0) != int(filters["cliente_id"]):
@@ -176,10 +207,12 @@ def client_metrics(filters=None, q=None, limit=None, only_status=None, _rows=Non
 
     for r in rows:
         cliente = r["cliente"]
+        if not has_valid_client(cliente):
+            continue
         if q and not (
             match_text(cliente.get("razao_social"), q)
             or match_text(cliente.get("nome_fantasia"), q)
-            or match_text(cliente.get("cnpj_cpf"), q)
+            or match_text(client_document(cliente), q)
         ):
             continue
 
@@ -202,6 +235,8 @@ def client_metrics(filters=None, q=None, limit=None, only_status=None, _rows=Non
     result = []
     for entry in by_client.values():
         cliente = entry["cliente"]
+        if not has_valid_client(cliente):
+            continue
         dates = sorted(parse_iso(d) for d in entry["dates"] if d)
         first = dates[0] if dates else None
         last = dates[-1] if dates else None
@@ -222,6 +257,7 @@ def client_metrics(filters=None, q=None, limit=None, only_status=None, _rows=Non
         )
         row = {
             **cliente,
+            "cnpj_cpf": client_document(cliente),
             "primeira_compra": first.isoformat() if first else None,
             "ultima_compra": last.isoformat() if last else None,
             "dias_sem_comprar": days_without,
@@ -370,7 +406,7 @@ def orders(filters, limit=100):
             "data_faturamento": r["data"],
             "cliente": r["cliente"].get("razao_social"),
             "nome_fantasia": r["cliente"].get("nome_fantasia"),
-            "cnpj_cpf": r["cliente"].get("cnpj_cpf"),
+            "cnpj_cpf": client_document(r["cliente"]),
             "codigo_produto": r["produto"].get("codigo"),
             "produto": r["produto"].get("descricao"),
             "familia": r["produto"].get("familia"),

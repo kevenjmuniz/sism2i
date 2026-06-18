@@ -5,6 +5,8 @@ import {
   Boxes,
   FileUp,
   LayoutDashboard,
+  PanelLeftClose,
+  PanelLeftOpen,
   ReceiptText,
   UsersRound,
 } from "lucide-react";
@@ -48,6 +50,7 @@ function App() {
   const [draftFilters, setDraftFilters] = useState(blankFilters);
   const [filters, setFilters] = useState(blankFilters);
   const [refresh, setRefresh] = useState(0);
+  const [sidebarHidden, setSidebarHidden] = useState(false);
 
   React.useEffect(() => {
     api("/api/auth/me")
@@ -81,33 +84,47 @@ function App() {
   }
 
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <div className="brand">
-          <img className="brandLogo" src={logoM2i} alt="M2i Comercial" />
-          <div>
-            <strong>M2i Comercial</strong>
-            <span>Pescados e frutos do mar</span>
-          </div>
-        </div>
-        <nav>
-          {nav.map(([id, Icon, label]) => (
-            <button
-              className={page === id ? "active" : ""}
-              key={id}
-              onClick={() => setPage(id)}
-            >
-              <Icon size={18} />
-              {label}
+    <div className={sidebarHidden ? "app sidebarHidden" : "app"}>
+      {!sidebarHidden && (
+        <aside className="sidebar">
+          <div className="sidebarHeader">
+            <div className="brand">
+              <img className="brandLogo" src={logoM2i} alt="M2i Comercial" />
+              <div>
+                <strong>M2i Comercial</strong>
+                <span>Pescados e frutos do mar</span>
+              </div>
+            </div>
+            <button className="iconAction dark" title="Esconder menu" onClick={() => setSidebarHidden(true)}>
+              <PanelLeftClose size={18} />
             </button>
-          ))}
-        </nav>
-      </aside>
+          </div>
+          <nav>
+            {nav.map(([id, Icon, label]) => (
+              <button
+                className={page === id ? "active" : ""}
+                key={id}
+                onClick={() => setPage(id)}
+              >
+                <Icon size={18} />
+                {label}
+              </button>
+            ))}
+          </nav>
+        </aside>
+      )}
       <main className="content">
         <header className="topbar">
-          <div>
-            <h1>{nav.find(([id]) => id === page)?.[2]}</h1>
-            <p>Priorize clientes, entenda frequência de compra e recupere oportunidades.</p>
+          <div className="topbarTitle">
+            {sidebarHidden && (
+              <button className="iconAction" title="Mostrar menu" onClick={() => setSidebarHidden(false)}>
+                <PanelLeftOpen size={18} />
+              </button>
+            )}
+            <div>
+              <h1>{nav.find(([id]) => id === page)?.[2]}</h1>
+              <p>Priorize clientes, entenda frequência de compra e recupere oportunidades.</p>
+            </div>
           </div>
           <button className="secondaryAction" onClick={async () => { await api("/api/auth/logout", { method: "POST" }); clearDataCache(); setAuth({ checking: false, authenticated: false, error: "" }); }}>Sair</button>
         </header>

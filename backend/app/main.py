@@ -1,4 +1,6 @@
 from pathlib import Path
+from collections import defaultdict
+from datetime import date, datetime
 from decimal import Decimal
 import hashlib
 import hmac
@@ -12,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .db import get_connection, init_db
+from .client_address_importer import import_client_addresses_upload
 from .importer import import_csv, import_upload
 from . import supabase_api
 from . import supabase_store
@@ -193,6 +196,106 @@ def filter_payload(
     }
 
 
+def parse_local_date(value):
+    if not value:
+        return None
+    return datetime.strptime(value[:10], "%Y-%m-%d").date()
+
+
+def local_client_metrics(filters, only_status=None, limit=100):
+    where, params = filter_clause(**filters)
+    data = rows(
+        f"""
+        SELECT c.id, c.razao_social, c.nome_fantasia, c.cnpj_cpf, c.endereco, c.cidade, c.estado, c.vendedor,
+               p.id AS pedido_id,
+               COALESCE(p.data_faturamento, p.data_inclusao) AS data_compra,
+               pr.id AS produto_id,
+               pr.descricao AS produto,
+               i.quantidade,
+               i.total_mercadoria
+        FROM itens_pedido i
+        JOIN pedidos p ON p.id = i.pedido_id
+        JOIN clientes c ON c.id = p.cliente_id
+        JOIN produtos pr ON pr.id = i.produto_id
+        LEFT JOIN notas_fiscais nf ON nf.id = i.nota_fiscal_id
+        {where}
+        """,
+        params,
+    )
+    today = date.today()
+    by_client = defaultdict(
+        lambda: {
+            "cliente": None,
+            "total": 0.0,
+            "pedidos": set(),
+            "dates": set(),
+            "products": defaultdict(lambda: {"quantidade": 0.0, "valor": 0.0, "produto": None}),
+        }
+    )
+
+    for row in data:
+        entry = by_client[row["id"]]
+        entry["cliente"] = {
+            "id": row["id"],
+            "razao_social": row["razao_social"],
+            "nome_fantasia": row["nome_fantasia"],
+            "cnpj_cpf": row["cnpj_cpf"],
+            "endereco": row["endereco"],
+            "cidade": row["cidade"],
+            "estado": row["estado"],
+            "vendedor": row["vendedor"],
+        }
+        entry["total"] += row["total_mercadoria"] or 0
+        entry["pedidos"].add(row["pedido_id"])
+        if row["data_compra"]:
+            entry["dates"].add(row["data_compra"][:10])
+        product = entry["products"][row["produto_id"]]
+        product["produto"] = row["produto"]
+        product["quantidade"] += row["quantidade"] or 0
+        product["valor"] += row["total_mercadoria"] or 0
+
+    result = []
+    for entry in by_client.values():
+        cliente = entry["cliente"]
+        dates = sorted(parse_local_date(d) for d in entry["dates"] if d)
+        first = dates[0] if dates else None
+        last = dates[-1] if dates else None
+        gaps = [(dates[i] - dates[i - 1]).days for i in range(1, len(dates))]
+        avg_frequency = sum(gaps) / len(gaps) if gaps else None
+        days_without = supabase_store.days_between(last, today)
+        order_count = len(entry["pedidos"])
+        ticket = entry["total"] / order_count if order_count else 0
+        current_status = supabase_store.status_from(days_without, avg_frequency, order_count)
+        top_products = sorted(entry["products"].values(), key=lambda p: p["quantidade"], reverse=True)
+        product_names = ", ".join([p["produto"] for p in top_products[:3] if p["produto"]])
+        priority = (
+            (days_without or 0) * 1.4
+            + (entry["total"] / 10000)
+            + (ticket / 1500)
+            + ((90 / avg_frequency) if avg_frequency and avg_frequency > 0 else 0)
+            + supabase_store.status_rank(current_status) * 20
+        )
+        row = {
+            **cliente,
+            "primeira_compra": first.isoformat() if first else None,
+            "ultima_compra": last.isoformat() if last else None,
+            "dias_sem_comprar": days_without,
+            "status": current_status,
+            "status_cor": supabase_store.status_color(current_status),
+            "total_comprado": entry["total"],
+            "pedidos": order_count,
+            "ticket_medio": ticket,
+            "frequencia_media": avg_frequency,
+            "produtos_recorrentes": product_names,
+            "prioridade": priority,
+        }
+        if only_status and row["status"] != only_status:
+            continue
+        result.append(row)
+
+    return sorted(result, key=lambda x: x["prioridade"], reverse=True)[:limit]
+
+
 @app.post("/api/import")
 async def upload_csv(file: UploadFile = File(...)):
     if not file.filename.lower().endswith(".csv"):
@@ -203,6 +306,18 @@ async def upload_csv(file: UploadFile = File(...)):
             supabase_store.invalidate_snapshot_cache()
             return result
         return await import_upload(file)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/import/client-addresses")
+async def upload_client_addresses_csv(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Envie um arquivo CSV.")
+    try:
+        return await import_client_addresses_upload(file)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -319,7 +434,8 @@ def recovery(
         filters = {"start": start, "end": end, "cliente": cliente, "produto": produto, "vendedor": vendedor, "cidade": cidade, "estado": estado, "familia": familia}
         rows = supabase_store.client_metrics(filters, only_status=status)
         return rows[:limit]
-    return []
+    filters = {"start": start, "end": end, "cliente": cliente, "produto": produto, "vendedor": vendedor, "cidade": cidade, "estado": estado, "familia": familia}
+    return local_client_metrics(filters, only_status=status, limit=limit)
 
 
 @app.get("/api/clients")
@@ -373,7 +489,7 @@ def clients(
     params.append(limit)
     return rows(
         f"""
-        SELECT c.id, c.razao_social, c.nome_fantasia, c.cnpj_cpf, c.cidade, c.estado, c.vendedor,
+        SELECT c.id, c.razao_social, c.nome_fantasia, c.cnpj_cpf, c.endereco, c.cidade, c.estado, c.vendedor,
                COALESCE(SUM(i.total_mercadoria), 0) AS total_comprado,
                COUNT(DISTINCT p.id) AS pedidos,
                MAX(COALESCE(p.data_faturamento, p.data_inclusao)) AS ultima_compra,
@@ -402,7 +518,7 @@ def client_detail(client_id: int):
 
     data = one(
         """
-        SELECT c.id, c.razao_social, c.nome_fantasia, c.cnpj_cpf, c.cidade, c.estado, c.vendedor,
+        SELECT c.id, c.razao_social, c.nome_fantasia, c.cnpj_cpf, c.endereco, c.cidade, c.estado, c.vendedor,
                COALESCE(SUM(i.total_mercadoria), 0) AS total_comprado,
                COUNT(DISTINCT p.id) AS pedidos,
                MAX(COALESCE(p.data_faturamento, p.data_inclusao)) AS ultima_compra,
