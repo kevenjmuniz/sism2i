@@ -39,6 +39,15 @@ function exportValue(row, column) {
   return type === "string" || type === "number" || type === "boolean" ? formatted : value;
 }
 
+function isDocumentColumn(column) {
+  const [key, label] = column;
+  return key === "cnpj_cpf" || String(label || "").toLowerCase().includes("cnpj");
+}
+
+function documentText(value) {
+  return String(value ?? "").trim();
+}
+
 export function exportCsv(filename, rows, columns) {
   const header = columns.map(([, label]) => `"${label}"`).join(",");
   const body = rows
@@ -46,7 +55,7 @@ export function exportCsv(filename, rows, columns) {
       columns
         .map((column) => {
           const val = exportValue(row, column);
-          const str = String(val);
+          const str = isDocumentColumn(column) && val ? `="${documentText(val)}"` : String(val);
           return str.includes(",") || str.includes('"') || str.includes("\n")
             ? `"${str.replace(/"/g, '""')}"`
             : str;
@@ -81,7 +90,13 @@ export function exportExcel(filename, rows, columns) {
         ${rows
           .map(
             (row) =>
-              `<tr>${columns.map((column) => `<td>${escapeHtml(exportValue(row, column))}</td>`).join("")}</tr>`
+              `<tr>${columns
+                .map((column) => {
+                  const value = exportValue(row, column);
+                  const style = isDocumentColumn(column) ? ` style="mso-number-format:'\\@';"` : "";
+                  return `<td${style}>${escapeHtml(isDocumentColumn(column) ? documentText(value) : value)}</td>`;
+                })
+                .join("")}</tr>`
           )
           .join("")}
       </tbody>

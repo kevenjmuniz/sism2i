@@ -1,5 +1,5 @@
 import React from "react";
-import { Chart } from "../components/Chart";
+import { Chart, RankingChart, StatusChart } from "../components/Chart";
 import { Table } from "../components/Table";
 import { useData } from "../hooks";
 import { money, number } from "../utils";
@@ -15,6 +15,12 @@ export function Dashboard({ query, refresh }) {
   if (error) return <Empty text={error} />;
 
   const s = data.summary;
+  const statusData = [
+    { name: "Ativos", value: s.clientes_ativos ?? 0 },
+    { name: "Em atenção", value: s.clientes_atencao ?? 0 },
+    { name: "Inativos", value: s.clientes_inativos ?? 0 },
+    { name: "Perdidos", value: s.clientes_perdidos ?? 0 },
+  ];
   const cards = [
     ["Total de clientes", number(s.clientes)],
     ["Ativos", number(s.clientes_ativos ?? 0), "green"],
@@ -37,20 +43,38 @@ export function Dashboard({ query, refresh }) {
           </article>
         ))}
       </section>
+
+      <section className="dashboardOverview">
+        <Chart title="Evolução do faturamento" data={data.monthly || []} />
+        <StatusChart data={statusData} />
+      </section>
+
       <section className="grid2">
-        <Chart title="Faturamento por mês" data={data.monthly} />
-        <Table
-          title="Clientes que mais compraram"
-          rows={data.top_clients}
-          filename="top-clientes.csv"
-          columns={[
-            ["razao_social", "Cliente"],
-            ["cidade", "Cidade"],
-            ["estado", "UF"],
-            ["total", "Total", money],
-          ]}
+        <RankingChart
+          title="Faturamento por vendedor"
+          data={data.top_sellers || []}
+          nameKey="vendedor"
+          color="#0f766e"
+        />
+        <RankingChart
+          title="Produtos com maior faturamento"
+          data={data.top_products || []}
+          nameKey="descricao"
+          color="#7c3aed"
         />
       </section>
+
+      <Table
+        title="Clientes que mais compraram"
+        rows={data.top_clients || []}
+        filename="top-clientes.csv"
+        columns={[
+          ["razao_social", "Cliente"],
+          ["cidade", "Cidade"],
+          ["estado", "UF"],
+          ["total", "Total", money],
+        ]}
+      />
     </div>
   );
 }

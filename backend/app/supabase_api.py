@@ -1,4 +1,5 @@
 import os
+from urllib.parse import quote
 
 import httpx
 from dotenv import load_dotenv
@@ -80,6 +81,22 @@ def table_delete_all(table):
         )
     if response.status_code >= 400:
         raise RuntimeError(f"Erro Supabase delete {table}: {response.status_code} - {response.text}")
+
+
+def table_patch(table, column, value, payload):
+    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/{table}"
+    headers = _headers()
+    headers["Prefer"] = "return=representation"
+    with httpx.Client(timeout=60) as client:
+        response = client.patch(
+            url,
+            params={column: f"eq.{quote(str(value), safe='')}"},
+            headers=headers,
+            json=payload,
+        )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Erro Supabase update {table}: {response.status_code} - {response.text}")
+    return response.json() if response.text else []
 
 
 def rpc(name, payload=None):

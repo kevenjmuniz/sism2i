@@ -1,0 +1,240 @@
+import csv
+import re
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+
+from . import supabase_api
+from . import supabase_store
+from .db import DATABASE_URL, get_connection, init_db, psycopg
+
+CNPJ_COLUMNS = ["CNPJ / CPF", "CNPJ/CPF", "CPF/CNPJ", "Documento"]
+ADDRESS_COLUMNS = ["Endereço", "Endereco", "Endereço Completo", "Endereco Completo"]
+SUPPLIER_COLUMNS = ["Tags", "Tag - Fornecedor", "Fornecedor"]
+
+
+def normalize_document(value):
+    return re.sub(r"\D+", "", str(value or ""))
+
+
+def client_document(row):
+    return normalize_document(row.get("cnpj_cpf") or row.get("cnpj") or row.get("CNPJ/CPF") or row.get("CNPJ / CPF"))
+
+
+def row_is_supplier(row):
+    for column in SUPPLIER_COLUMNS:
+        value = str(row.get(column, "") or "").strip().lower()
+        if "fornecedor" in value or value in {"sim", "s", "true", "1"}:
+            return True
+    return False
+
+
+def clean_key(value):
+    return (value or "").lstrip("\ufeff").strip()
+
+
+def sniff_dialect(sample):
+    try:
+        return csv.Sniffer().sniff(sample, delimiters=";\t,")
+    except csv.Error:
+        return csv.excel
+
+
+def pick_column(headers, candidates):
+    normalized = {clean_key(header).lower(): clean_key(header) for header in headers or []}
+    for candidate in candidates:
+        found = normalized.get(candidate.lower())
+        if found:
+            return found
+    return None
+
+
+def load_address_rows(path):
+    path = Path(path)
+    with path.open("r", encoding="utf-8-sig", newline="") as file:
+        sample = file.read(4096)
+        file.seek(0)
+        reader = csv.DictReader(file, dialect=sniff_dialect(sample))
+        headers = [clean_key(header) for header in reader.fieldnames or []]
+        document_column = pick_column(headers, CNPJ_COLUMNS)
+        address_column = pick_column(headers, ADDRESS_COLUMNS)
+        if not document_column:
+            raise ValueError("Coluna de CNPJ/CPF não encontrada no CSV de clientes.")
+        if not address_column:
+            raise ValueError("Coluna de endereço não encontrada no CSV de clientes.")
+
+        result = []
+        for raw in reader:
+            row = {clean_key(key): (value.strip() if isinstance(value, str) else value) for key, value in raw.items()}
+            document = normalize_document(row.get(document_column))
+            address = row.get(address_column, "").strip()
+            result.append({"document": document, "address": address, "is_supplier": row_is_supplier(row)})
+        return result
+
+
+def import_client_addresses_local(path):
+    init_db()
+    address_rows = load_address_rows(path)
+    with get_connection() as conn:
+        existing = {
+            normalize_document(row["cnpj_cpf"]): row["id"]
+            for row in conn.execute("SELECT id, cnpj_cpf FROM clientes").fetchall()
+            if normalize_document(row["cnpj_cpf"])
+        }
+        updated_ids = set()
+        suppliers_marked = set()
+        with_address = matched = skipped_without_address = unmatched = 0
+        for row in address_rows:
+            if not row["address"]:
+                skipped_without_address += 1
+                continue
+            with_address += 1
+            client_id = existing.get(row["document"])
+            if not client_id:
+                unmatched += 1
+                continue
+            matched += 1
+            conn.execute(
+                "UPDATE clientes SET endereco = ?, is_fornecedor = ? WHERE id = ?",
+                (row["address"], 1 if row["is_supplier"] else 0, client_id),
+            )
+            updated_ids.add(client_id)
+            if row["is_supplier"]:
+                suppliers_marked.add(client_id)
+
+    return {
+        "rows": len(address_rows),
+        "with_address": with_address,
+        "matched": matched,
+        "updated": len(updated_ids),
+        "unmatched": unmatched,
+        "skipped_without_address": skipped_without_address,
+        "suppliers_marked": len(suppliers_marked),
+        "mode": "local",
+    }
+
+
+def import_client_addresses_supabase(path):
+    if not supabase_api.enabled():
+        raise RuntimeError("Supabase REST não configurado.")
+    address_rows = load_address_rows(path)
+    clientes = supabase_store.table("clientes")
+    existing = {
+        client_document(row): row.get("id")
+        for row in clientes
+        if client_document(row)
+    }
+    updated_ids = set()
+    suppliers_marked = set()
+    with_address = matched = skipped_without_address = unmatched = 0
+    for row in address_rows:
+        if not row["address"]:
+            skipped_without_address += 1
+            continue
+        with_address += 1
+        client_id = existing.get(row["document"])
+        if not client_id:
+            unmatched += 1
+            continue
+        matched += 1
+        supabase_api.table_patch(
+            "clientes",
+            "id",
+            client_id,
+            {"endereco": row["address"], "is_fornecedor": row["is_supplier"]},
+        )
+        updated_ids.add(client_id)
+        if row["is_supplier"]:
+            suppliers_marked.add(client_id)
+    supabase_store.invalidate_snapshot_cache()
+    return {
+        "rows": len(address_rows),
+        "with_address": with_address,
+        "matched": matched,
+        "updated": len(updated_ids),
+        "unmatched": unmatched,
+        "skipped_without_address": skipped_without_address,
+        "suppliers_marked": len(suppliers_marked),
+        "mode": "supabase-rest",
+    }
+
+
+def import_client_addresses_postgres(path):
+    if not DATABASE_URL or psycopg is None:
+        raise RuntimeError("DATABASE_URL não configurada para atualização direta no PostgreSQL.")
+
+    address_rows = load_address_rows(path)
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS is_fornecedor BOOLEAN NOT NULL DEFAULT FALSE")
+            cur.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'clientes'
+                  AND column_name IN ('cnpj_cpf', 'cnpj')
+                ORDER BY CASE column_name WHEN 'cnpj_cpf' THEN 1 ELSE 2 END
+                LIMIT 1
+                """
+            )
+            document_column = cur.fetchone()
+            if not document_column:
+                raise RuntimeError("A tabela clientes precisa ter uma coluna cnpj ou cnpj_cpf.")
+            document_column = document_column[0]
+
+            cur.execute(f"SELECT id, {document_column} FROM clientes")
+            existing = {
+                normalize_document(document): client_id
+                for client_id, document in cur.fetchall()
+                if normalize_document(document)
+            }
+
+            updated_ids = set()
+            suppliers_marked = set()
+            with_address = matched = skipped_without_address = unmatched = 0
+            for row in address_rows:
+                if not row["address"]:
+                    skipped_without_address += 1
+                    continue
+                with_address += 1
+                client_id = existing.get(row["document"])
+                if not client_id:
+                    unmatched += 1
+                    continue
+                matched += 1
+                cur.execute(
+                    "UPDATE clientes SET endereco = %s, is_fornecedor = %s WHERE id = %s",
+                    (row["address"], row["is_supplier"], client_id),
+                )
+                updated_ids.add(client_id)
+                if row["is_supplier"]:
+                    suppliers_marked.add(client_id)
+
+    supabase_store.invalidate_snapshot_cache()
+    return {
+        "rows": len(address_rows),
+        "with_address": with_address,
+        "matched": matched,
+        "updated": len(updated_ids),
+        "unmatched": unmatched,
+        "skipped_without_address": skipped_without_address,
+        "suppliers_marked": len(suppliers_marked),
+        "mode": "postgres-direct",
+    }
+
+
+def import_client_addresses(path):
+    if supabase_api.enabled():
+        if DATABASE_URL:
+            return import_client_addresses_postgres(path)
+        return import_client_addresses_supabase(path)
+    return import_client_addresses_local(path)
+
+
+async def import_client_addresses_upload(upload_file):
+    suffix = Path(upload_file.filename or "clientes.csv").suffix or ".csv"
+    with NamedTemporaryFile(delete=False, suffix=suffix) as temp:
+        content = await upload_file.read()
+        temp.write(content)
+        temp_path = temp.name
+    return import_client_addresses(temp_path)

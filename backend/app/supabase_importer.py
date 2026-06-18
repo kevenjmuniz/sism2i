@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from . import supabase_api
-from .importer import is_supplier_row, normalize_row, parse_date, parse_number, validate_columns
+from .importer import is_supplier_row, normalize_row, parse_date, parse_number, row_endereco, validate_columns
 
 
 def reset_tables():
@@ -15,7 +15,7 @@ def unique_values(items):
     return list(items.values())
 
 
-def import_csv_supabase(path, replace=True):
+def import_csv_supabase(path, replace=False):
     if not supabase_api.enabled():
         raise RuntimeError("Supabase REST nao configurado.")
 
@@ -52,6 +52,7 @@ def import_csv_supabase(path, replace=True):
             "razao_social": row["Cliente (Razão Social)"],
             "nome_fantasia": row["Cliente (Nome Fantasia)"],
             "cnpj_cpf": cnpj,
+            "endereco": row_endereco(row),
             "cidade": row["Cidade"],
             "estado": row["Estado"],
             "vendedor": row["Vendedor"],
@@ -127,7 +128,6 @@ def import_csv_supabase(path, replace=True):
         "itens_pedido",
         unique_values(itens),
         "pedido_id,produto_id,item_numero",
-        ignore=True,
     )
 
     return {
@@ -145,4 +145,4 @@ async def import_upload_supabase(upload_file):
         content = await upload_file.read()
         temp.write(content)
         temp_path = temp.name
-    return import_csv_supabase(temp_path, replace=True)
+    return import_csv_supabase(temp_path, replace=False)

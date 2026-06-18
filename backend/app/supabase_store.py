@@ -6,6 +6,7 @@ import time
 import httpx
 
 from . import supabase_api
+from .db import DATABASE_URL, psycopg
 
 _snapshot_cache: dict = {"data": None, "ts": 0.0}
 _CACHE_TTL = 300  # 5 minutos
@@ -93,6 +94,34 @@ def table(name, order=None):
     return data
 
 
+def postgres_table(name):
+    if not DATABASE_URL or psycopg is None:
+        return None
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT * FROM {name}")
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
+def postgres_meta():
+    if not DATABASE_URL or psycopg is None:
+        return None
+    queries = {
+        "vendedores": "SELECT DISTINCT vendedor FROM pedidos WHERE vendedor IS NOT NULL AND vendedor <> '' ORDER BY vendedor",
+        "cidades": "SELECT DISTINCT cidade FROM clientes WHERE cidade IS NOT NULL AND cidade <> '' ORDER BY cidade",
+        "estados": "SELECT DISTINCT estado FROM clientes WHERE estado IS NOT NULL AND estado <> '' ORDER BY estado",
+        "familias": "SELECT DISTINCT familia FROM produtos WHERE familia IS NOT NULL AND familia <> '' ORDER BY familia",
+    }
+    result = {}
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            for key, query in queries.items():
+                cur.execute(query)
+                result[key] = [row[0] for row in cur.fetchall()]
+    return result
+
+
 def invalidate_snapshot_cache():
     _snapshot_cache["data"] = None
     _snapshot_cache["ts"] = 0.0
@@ -102,7 +131,8 @@ def snapshot():
     now = time.time()
     if _snapshot_cache["data"] is not None and now - _snapshot_cache["ts"] < _CACHE_TTL:
         return _snapshot_cache["data"]
-    clientes = {row["id"]: row for row in table("clientes")}
+    clientes_rows = postgres_table("clientes") or table("clientes")
+    clientes = {row["id"]: row for row in clientes_rows}
     produtos = {row["id"]: row for row in table("produtos")}
     pedidos = {row["id"]: row for row in table("pedidos")}
     notas = {row["id"]: row for row in table("notas_fiscais")}
@@ -119,6 +149,37 @@ def match_text(value, term):
     return term.lower() in str(value or "").lower()
 
 
+def match_client(cliente, term):
+    if not term:
+        return True
+    document = client_document(cliente)
+    term_digits = "".join(char for char in str(term) if char.isdigit())
+    document_digits = "".join(char for char in str(document or "") if char.isdigit())
+    return bool(
+        match_text(cliente.get("razao_social"), term)
+        or match_text(cliente.get("nome_fantasia"), term)
+        or match_text(document, term)
+        or (term_digits and term_digits in document_digits)
+    )
+
+
+def client_document(cliente):
+    return cliente.get("cnpj_cpf") or cliente.get("cnpj") or cliente.get("CNPJ/CPF") or cliente.get("CNPJ / CPF")
+
+
+def has_valid_client(cliente):
+    return bool(
+        cliente
+        and cliente.get("id")
+        and cliente.get("is_fornecedor") not in {True, 1, "1", "true", "True", "sim", "Sim"}
+        and (
+            cliente.get("razao_social")
+            or cliente.get("nome_fantasia")
+            or client_document(cliente)
+        )
+    )
+
+
 def item_rows(filters=None):
     filters = filters or {}
     clientes, produtos, pedidos, notas, itens = snapshot()
@@ -130,15 +191,14 @@ def item_rows(filters=None):
         nota = notas.get(item.get("nota_fiscal_id")) or {}
         data = nota.get("data_faturamento") or pedido.get("data_faturamento") or pedido.get("data_inclusao")
 
+        if not has_valid_client(cliente):
+            continue
+
         if filters.get("start") and (not data or data < filters["start"]):
             continue
         if filters.get("end") and (not data or data > filters["end"]):
             continue
-        if filters.get("cliente") and not (
-            match_text(cliente.get("razao_social"), filters["cliente"])
-            or match_text(cliente.get("nome_fantasia"), filters["cliente"])
-            or match_text(cliente.get("cnpj_cpf"), filters["cliente"])
-        ):
+        if filters.get("cliente") and not match_client(cliente, filters["cliente"]):
             continue
         if filters.get("cliente_id") and int(cliente.get("id") or 0) != int(filters["cliente_id"]):
             continue
@@ -176,11 +236,9 @@ def client_metrics(filters=None, q=None, limit=None, only_status=None, _rows=Non
 
     for r in rows:
         cliente = r["cliente"]
-        if q and not (
-            match_text(cliente.get("razao_social"), q)
-            or match_text(cliente.get("nome_fantasia"), q)
-            or match_text(cliente.get("cnpj_cpf"), q)
-        ):
+        if not has_valid_client(cliente):
+            continue
+        if q and not match_client(cliente, q):
             continue
 
         client_id = cliente.get("id")
@@ -202,6 +260,8 @@ def client_metrics(filters=None, q=None, limit=None, only_status=None, _rows=Non
     result = []
     for entry in by_client.values():
         cliente = entry["cliente"]
+        if not has_valid_client(cliente):
+            continue
         dates = sorted(parse_iso(d) for d in entry["dates"] if d)
         first = dates[0] if dates else None
         last = dates[-1] if dates else None
@@ -222,6 +282,7 @@ def client_metrics(filters=None, q=None, limit=None, only_status=None, _rows=Non
         )
         row = {
             **cliente,
+            "cnpj_cpf": client_document(cliente),
             "primeira_compra": first.isoformat() if first else None,
             "ultima_compra": last.isoformat() if last else None,
             "dias_sem_comprar": days_without,
@@ -259,6 +320,7 @@ def dashboard(filters):
 
     by_product = defaultdict(lambda: {"quantidade": 0.0, "total": 0.0, "produto": None})
     by_client = defaultdict(lambda: {"total": 0.0, "cliente": None})
+    by_seller = defaultdict(float)
     by_month = defaultdict(float)
     for r in rows:
         product_id = r["produto"].get("id")
@@ -268,11 +330,15 @@ def dashboard(filters):
         by_product[product_id]["total"] += num(r["item"].get("total_mercadoria"))
         by_client[client_id]["cliente"] = r["cliente"]
         by_client[client_id]["total"] += num(r["item"].get("total_mercadoria"))
+        seller = r["pedido"].get("vendedor")
+        if seller:
+            by_seller[seller] += num(r["item"].get("total_mercadoria"))
         if r["data"]:
             by_month[r["data"][:7]] += num(r["item"].get("total_mercadoria"))
 
-    top_products = sorted(by_product.values(), key=lambda x: x["quantidade"], reverse=True)[:8]
+    top_products = sorted(by_product.values(), key=lambda x: x["total"], reverse=True)[:8]
     top_clients = sorted(by_client.values(), key=lambda x: x["total"], reverse=True)[:8]
+    top_sellers = sorted(by_seller.items(), key=lambda x: x[1], reverse=True)[:8]
     status_counts = defaultdict(int)
     for client in metrics:
         status_counts[client["status"]] += 1
@@ -314,6 +380,7 @@ def dashboard(filters):
             for c in top_clients
             if c["cliente"]
         ],
+        "top_sellers": [{"vendedor": seller, "total": seller_total} for seller, seller_total in top_sellers],
         "monthly": [{"mes": month, "total": total} for month, total in sorted(by_month.items())],
     }
 
@@ -370,7 +437,7 @@ def orders(filters, limit=100):
             "data_faturamento": r["data"],
             "cliente": r["cliente"].get("razao_social"),
             "nome_fantasia": r["cliente"].get("nome_fantasia"),
-            "cnpj_cpf": r["cliente"].get("cnpj_cpf"),
+            "cnpj_cpf": client_document(r["cliente"]),
             "codigo_produto": r["produto"].get("codigo"),
             "produto": r["produto"].get("descricao"),
             "familia": r["produto"].get("familia"),
@@ -446,7 +513,12 @@ def product_clients(product_id):
 
 
 def meta():
-    clientes, produtos, pedidos, _, _ = snapshot()
+    direct = postgres_meta()
+    if direct is not None:
+        return direct
+    clientes = {row["id"]: row for row in table("clientes")}
+    produtos = {row["id"]: row for row in table("produtos")}
+    pedidos = {row["id"]: row for row in table("pedidos")}
     return {
         "vendedores": sorted({p.get("vendedor") for p in pedidos.values() if p.get("vendedor")}),
         "cidades": sorted({c.get("cidade") for c in clientes.values() if c.get("cidade")}),

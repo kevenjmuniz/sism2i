@@ -25,7 +25,7 @@ function ClientAnalysis({ clientId, onClose }) {
         <div>
           <h2>{c.razao_social}</h2>
           <p>
-            {c.nome_fantasia || "-"} · {c.cnpj_cpf} · {c.cidade}/{c.estado}
+            {c.nome_fantasia || "-"} · {c.cnpj_cpf} · {c.endereco || "-"} · {c.cidade}/{c.estado}
           </p>
         </div>
         <div className="clientHeaderRight">
@@ -126,6 +126,7 @@ export function Clients({ query, refresh }) {
         columns={[
           ["razao_social", "Cliente"],
           ["nome_fantasia", "Fantasia"],
+          ["endereco", "Endereço"],
           ["cidade", "Cidade"],
           ["estado", "UF"],
           ["status", "Status", (v) => <StatusBadge status={v} />],

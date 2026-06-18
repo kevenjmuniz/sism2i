@@ -76,15 +76,26 @@ def validate_columns(headers):
         raise ValueError("Colunas obrigatórias ausentes: " + ", ".join(missing))
 
 
+def row_endereco(row):
+    return (
+        row.get("Endereço Completo")
+        or row.get("Endereco Completo")
+        or row.get("Entrega - Endereço Completo")
+        or row.get("Entrega - Endereco Completo")
+        or ""
+    )
+
+
 def upsert_cliente(conn, row):
     cnpj = row["CNPJ/CPF"] or "SEM-CNPJ-" + row["Cliente (Razão Social)"]
     conn.execute(
         """
-        INSERT INTO clientes (razao_social, nome_fantasia, cnpj_cpf, cidade, estado, vendedor)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO clientes (razao_social, nome_fantasia, cnpj_cpf, endereco, cidade, estado, vendedor)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(cnpj_cpf) DO UPDATE SET
             razao_social=excluded.razao_social,
             nome_fantasia=excluded.nome_fantasia,
+            endereco=excluded.endereco,
             cidade=excluded.cidade,
             estado=excluded.estado,
             vendedor=excluded.vendedor
@@ -93,6 +104,7 @@ def upsert_cliente(conn, row):
             row["Cliente (Razão Social)"],
             row["Cliente (Nome Fantasia)"],
             cnpj,
+            row_endereco(row),
             row["Cidade"],
             row["Estado"],
             row["Vendedor"],
@@ -116,7 +128,7 @@ def upsert_produto(conn, row):
     return conn.execute("SELECT id FROM produtos WHERE codigo = ?", (codigo,)).fetchone()["id"]
 
 
-def import_csv(path, replace=True):
+def import_csv(path, replace=False):
     init_db()
     path = Path(path)
     imported = skipped_invalid_date = skipped_duplicates = skipped_supplier = 0
@@ -189,15 +201,24 @@ def import_csv(path, replace=True):
                             quantidade, valor_unitario, total_mercadoria
                         )
                         VALUES (?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(pedido_id, produto_id, item_numero) DO NOTHING
+                        ON CONFLICT(pedido_id, produto_id, item_numero) DO UPDATE SET
+                            nota_fiscal_id=excluded.nota_fiscal_id,
+                            quantidade=excluded.quantidade,
+                            valor_unitario=excluded.valor_unitario,
+                            total_mercadoria=excluded.total_mercadoria
                     """
                 else:
                     insert_item_sql = """
-                        INSERT OR IGNORE INTO itens_pedido (
+                        INSERT INTO itens_pedido (
                             pedido_id, produto_id, nota_fiscal_id, item_numero,
                             quantidade, valor_unitario, total_mercadoria
                         )
                         VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(pedido_id, produto_id, item_numero) DO UPDATE SET
+                            nota_fiscal_id=excluded.nota_fiscal_id,
+                            quantidade=excluded.quantidade,
+                            valor_unitario=excluded.valor_unitario,
+                            total_mercadoria=excluded.total_mercadoria
                     """
 
                 inserted = conn.execute(
@@ -232,4 +253,4 @@ async def import_upload(upload_file):
         content = await upload_file.read()
         temp.write(content)
         temp_path = temp.name
-    return import_csv(temp_path, replace=True)
+    return import_csv(temp_path, replace=False)

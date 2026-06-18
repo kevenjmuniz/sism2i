@@ -19,9 +19,10 @@ RETURNS jsonb
 LANGUAGE sql
 AS $$
 WITH base AS (
-    SELECT i.*, p.numero AS pedido_numero, p.data_inclusao, p.data_faturamento, p.vendedor,
+    SELECT i.pedido_id, i.produto_id, i.quantidade, i.total_mercadoria,
+           p.numero AS pedido_numero, p.data_inclusao, p.data_faturamento, p.vendedor,
            c.id AS cliente_id, c.razao_social, c.nome_fantasia, c.cnpj_cpf, c.cidade, c.estado,
-           pr.id AS produto_id, pr.codigo, pr.descricao, pr.familia,
+           pr.codigo, pr.descricao, pr.familia,
            nf.id AS nota_id
     FROM itens_pedido i
     JOIN pedidos p ON p.id = i.pedido_id

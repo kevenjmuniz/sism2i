@@ -84,6 +84,15 @@ export function GlobalFilters({ filters, setFilters, meta, onApply, onClear }) {
           onChange={(e) => updateDate("end", e.target.value)}
         />
       </label>
+      <label>
+        Cliente
+        <input
+          type="search"
+          value={filters.cliente}
+          onChange={(e) => update("cliente", e.target.value)}
+          placeholder="Nome, CPF ou CNPJ"
+        />
+      </label>
       <Select
         label="Status"
         value={filters.status}
