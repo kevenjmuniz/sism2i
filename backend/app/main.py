@@ -1,0 +1,684 @@
+from pathlib import Path
+from collections import defaultdict
+from datetime import date, datetime
+from decimal import Decimal
+import hashlib
+import hmac
+import os
+import secrets
+import time
+from typing import Optional
+
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from .db import get_connection, init_db
+from .client_address_importer import import_client_addresses_upload
+from .importer import import_csv, import_upload
+from . import supabase_api
+from . import supabase_store
+from .supabase_importer import import_csv_supabase, import_upload_supabase
+
+app = FastAPI(title="Histórico de Compras por Cliente")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:8013",
+        "http://127.0.0.1:8013",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+AUTH_USERNAME = os.getenv("AUTH_USERNAME", "admin")
+AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "admin")
+AUTH_SECRET = os.getenv("AUTH_SECRET") or os.getenv("SUPABASE_PUBLISHABLE_KEY") or secrets.token_urlsafe(32)
+SESSION_COOKIE = "historico_session"
+SESSION_TTL_SECONDS = 60 * 60 * 12
+
+
+def make_session_token(username):
+    expires = int(time.time()) + SESSION_TTL_SECONDS
+    payload = f"{username}:{expires}"
+    signature = hmac.new(AUTH_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}:{signature}"
+
+
+def verify_session_token(token):
+    if not token:
+        return False
+    try:
+        username, expires_text, signature = token.rsplit(":", 2)
+        expires = int(expires_text)
+    except ValueError:
+        return False
+    if expires < int(time.time()) or username != AUTH_USERNAME:
+        return False
+    payload = f"{username}:{expires}"
+    expected = hmac.new(AUTH_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature, expected)
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    public_paths = (
+        "/api/auth/login",
+        "/api/auth/me",
+        "/api/auth/logout",
+        "/favicon.ico",
+    )
+    if path.startswith("/api/") and path not in public_paths:
+        if not verify_session_token(request.cookies.get(SESSION_COOKIE)):
+            return Response('{"detail":"Login obrigatório."}', status_code=401, media_type="application/json")
+    return await call_next(request)
+
+
+@app.post("/api/auth/login")
+async def login(request: Request, response: Response):
+    data = await request.json()
+    username = str(data.get("username", ""))
+    password = str(data.get("password", ""))
+    if not (hmac.compare_digest(username, AUTH_USERNAME) and hmac.compare_digest(password, AUTH_PASSWORD)):
+        raise HTTPException(status_code=401, detail="Usuário ou senha inválidos.")
+    response.set_cookie(
+        SESSION_COOKIE,
+        make_session_token(username),
+        httponly=True,
+        samesite="lax",
+        max_age=SESSION_TTL_SECONDS,
+    )
+    return {"authenticated": True, "username": username}
+
+
+@app.get("/api/auth/me")
+def me(request: Request):
+    valid = verify_session_token(request.cookies.get(SESSION_COOKIE))
+    return {"authenticated": valid, "username": AUTH_USERNAME if valid else None}
+
+
+@app.post("/api/auth/logout")
+def logout(response: Response):
+    response.delete_cookie(SESSION_COOKIE)
+    return {"authenticated": False}
+
+
+@app.on_event("startup")
+def startup():
+    if not supabase_api.enabled():
+        init_db()
+
+
+def rows(sql, params=()):
+    with get_connection() as conn:
+        return [normalize_result(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def one(sql, params=()):
+    with get_connection() as conn:
+        row = conn.execute(sql, params).fetchone()
+        return normalize_result(row) if row else None
+
+
+def normalize_result(row):
+    data = dict(row)
+    for key, value in data.items():
+        if isinstance(value, Decimal):
+            data[key] = float(value)
+    return data
+
+
+def filter_clause(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    cliente: Optional[str] = None,
+    produto: Optional[str] = None,
+    vendedor: Optional[str] = None,
+    cidade: Optional[str] = None,
+    estado: Optional[str] = None,
+    familia: Optional[str] = None,
+):
+    clauses = []
+    params = []
+    date_expr = "COALESCE(p.data_faturamento, p.data_inclusao)"
+    if start:
+        clauses.append(f"{date_expr} >= ?")
+        params.append(start)
+    if end:
+        clauses.append(f"{date_expr} <= ?")
+        params.append(end)
+    if cliente:
+        clauses.append("(c.razao_social LIKE ? OR c.nome_fantasia LIKE ? OR c.cnpj_cpf LIKE ?)")
+        params.extend([f"%{cliente}%", f"%{cliente}%", f"%{cliente}%"])
+    if produto:
+        clauses.append("(pr.descricao LIKE ? OR pr.codigo LIKE ?)")
+        params.extend([f"%{produto}%", f"%{produto}%"])
+    if vendedor:
+        clauses.append("p.vendedor = ?")
+        params.append(vendedor)
+    if cidade:
+        clauses.append("c.cidade = ?")
+        params.append(cidade)
+    if estado:
+        clauses.append("c.estado = ?")
+        params.append(estado)
+    if familia:
+        clauses.append("pr.familia = ?")
+        params.append(familia)
+    return (" WHERE " + " AND ".join(clauses) if clauses else ""), params
+
+
+def filter_payload(
+    start=None,
+    end=None,
+    cliente=None,
+    produto=None,
+    vendedor=None,
+    cidade=None,
+    estado=None,
+    familia=None,
+    status=None,
+):
+    return {
+        "p_start": start or None,
+        "p_end": end or None,
+        "p_cliente": cliente or None,
+        "p_produto": produto or None,
+        "p_vendedor": vendedor or None,
+        "p_cidade": cidade or None,
+        "p_estado": estado or None,
+        "p_familia": familia or None,
+        "p_status": status or None,
+    }
+
+
+def parse_local_date(value):
+    if not value:
+        return None
+    return datetime.strptime(value[:10], "%Y-%m-%d").date()
+
+
+def local_client_metrics(filters, only_status=None, limit=100):
+    where, params = filter_clause(**filters)
+    data = rows(
+        f"""
+        SELECT c.id, c.razao_social, c.nome_fantasia, c.cnpj_cpf, c.endereco, c.cidade, c.estado, c.vendedor,
+               p.id AS pedido_id,
+               COALESCE(p.data_faturamento, p.data_inclusao) AS data_compra,
+               pr.id AS produto_id,
+               pr.descricao AS produto,
+               i.quantidade,
+               i.total_mercadoria
+        FROM itens_pedido i
+        JOIN pedidos p ON p.id = i.pedido_id
+        JOIN clientes c ON c.id = p.cliente_id
+        JOIN produtos pr ON pr.id = i.produto_id
+        LEFT JOIN notas_fiscais nf ON nf.id = i.nota_fiscal_id
+        {where}
+        """,
+        params,
+    )
+    today = date.today()
+    by_client = defaultdict(
+        lambda: {
+            "cliente": None,
+            "total": 0.0,
+            "pedidos": set(),
+            "dates": set(),
+            "products": defaultdict(lambda: {"quantidade": 0.0, "valor": 0.0, "produto": None}),
+        }
+    )
+
+    for row in data:
+        entry = by_client[row["id"]]
+        entry["cliente"] = {
+            "id": row["id"],
+            "razao_social": row["razao_social"],
+            "nome_fantasia": row["nome_fantasia"],
+            "cnpj_cpf": row["cnpj_cpf"],
+            "endereco": row["endereco"],
+            "cidade": row["cidade"],
+            "estado": row["estado"],
+            "vendedor": row["vendedor"],
+        }
+        entry["total"] += row["total_mercadoria"] or 0
+        entry["pedidos"].add(row["pedido_id"])
+        if row["data_compra"]:
+            entry["dates"].add(row["data_compra"][:10])
+        product = entry["products"][row["produto_id"]]
+        product["produto"] = row["produto"]
+        product["quantidade"] += row["quantidade"] or 0
+        product["valor"] += row["total_mercadoria"] or 0
+
+    result = []
+    for entry in by_client.values():
+        cliente = entry["cliente"]
+        dates = sorted(parse_local_date(d) for d in entry["dates"] if d)
+        first = dates[0] if dates else None
+        last = dates[-1] if dates else None
+        gaps = [(dates[i] - dates[i - 1]).days for i in range(1, len(dates))]
+        avg_frequency = sum(gaps) / len(gaps) if gaps else None
+        days_without = supabase_store.days_between(last, today)
+        order_count = len(entry["pedidos"])
+        ticket = entry["total"] / order_count if order_count else 0
+        current_status = supabase_store.status_from(days_without, avg_frequency, order_count)
+        top_products = sorted(entry["products"].values(), key=lambda p: p["quantidade"], reverse=True)
+        product_names = ", ".join([p["produto"] for p in top_products[:3] if p["produto"]])
+        priority = (
+            (days_without or 0) * 1.4
+            + (entry["total"] / 10000)
+            + (ticket / 1500)
+            + ((90 / avg_frequency) if avg_frequency and avg_frequency > 0 else 0)
+            + supabase_store.status_rank(current_status) * 20
+        )
+        row = {
+            **cliente,
+            "primeira_compra": first.isoformat() if first else None,
+            "ultima_compra": last.isoformat() if last else None,
+            "dias_sem_comprar": days_without,
+            "status": current_status,
+            "status_cor": supabase_store.status_color(current_status),
+            "total_comprado": entry["total"],
+            "pedidos": order_count,
+            "ticket_medio": ticket,
+            "frequencia_media": avg_frequency,
+            "produtos_recorrentes": product_names,
+            "prioridade": priority,
+        }
+        if only_status and row["status"] != only_status:
+            continue
+        result.append(row)
+
+    return sorted(result, key=lambda x: x["prioridade"], reverse=True)[:limit]
+
+
+@app.post("/api/import")
+async def upload_csv(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Envie um arquivo CSV.")
+    try:
+        if supabase_api.enabled():
+            result = await import_upload_supabase(file)
+            supabase_store.invalidate_snapshot_cache()
+            return result
+        return await import_upload(file)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/import/client-addresses")
+async def upload_client_addresses_csv(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Envie um arquivo CSV.")
+    try:
+        return await import_client_addresses_upload(file)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/import/local")
+def import_local(path: str):
+    resolved = Path(path).resolve()
+    if resolved.suffix.lower() != ".csv":
+        raise HTTPException(status_code=400, detail="Apenas arquivos CSV são permitidos.")
+    try:
+        if supabase_api.enabled():
+            result = import_csv_supabase(str(resolved), replace=True)
+            supabase_store.invalidate_snapshot_cache()
+            return result
+        return import_csv(str(resolved), replace=True)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/dashboard")
+def dashboard(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    cliente: Optional[str] = None,
+    produto: Optional[str] = None,
+    vendedor: Optional[str] = None,
+    cidade: Optional[str] = None,
+    estado: Optional[str] = None,
+    familia: Optional[str] = None,
+):
+    if supabase_api.enabled():
+        return supabase_store.dashboard({"start": start, "end": end, "cliente": cliente, "produto": produto, "vendedor": vendedor, "cidade": cidade, "estado": estado, "familia": familia})
+
+    where, params = filter_clause(start, end, cliente, produto, vendedor, cidade, estado, familia)
+    base = f"""
+        FROM itens_pedido i
+        JOIN pedidos p ON p.id = i.pedido_id
+        JOIN clientes c ON c.id = p.cliente_id
+        JOIN produtos pr ON pr.id = i.produto_id
+        LEFT JOIN notas_fiscais nf ON nf.id = i.nota_fiscal_id
+        {where}
+    """
+    summary = one(
+        f"""
+        SELECT
+            COALESCE(SUM(i.total_mercadoria), 0) AS total_vendido,
+            COUNT(DISTINCT c.id) AS clientes,
+            COUNT(DISTINCT p.id) AS pedidos,
+            COUNT(DISTINCT nf.id) AS notas
+        {base}
+        """,
+        params,
+    )
+    top_products = rows(
+        f"""
+        SELECT pr.codigo, pr.descricao, pr.familia, SUM(i.quantidade) AS quantidade,
+               SUM(i.total_mercadoria) AS total
+        {base}
+        GROUP BY pr.id
+        ORDER BY quantidade DESC
+        LIMIT 8
+        """,
+        params,
+    )
+    top_clients = rows(
+        f"""
+        SELECT c.id, c.razao_social, c.nome_fantasia, c.cidade, c.estado,
+               SUM(i.total_mercadoria) AS total
+        {base}
+        GROUP BY c.id
+        ORDER BY total DESC
+        LIMIT 8
+        """,
+        params,
+    )
+    monthly = rows(
+        f"""
+        SELECT substr(COALESCE(p.data_faturamento, p.data_inclusao), 1, 7) AS mes,
+               SUM(i.total_mercadoria) AS total
+        {base}
+        GROUP BY mes
+        ORDER BY mes
+        """,
+        params,
+    )
+    return {
+        "summary": summary,
+        "top_products": top_products,
+        "top_clients": top_clients,
+        "monthly": monthly,
+    }
+
+
+@app.get("/api/recovery")
+def recovery(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    cliente: Optional[str] = None,
+    produto: Optional[str] = None,
+    vendedor: Optional[str] = None,
+    cidade: Optional[str] = None,
+    estado: Optional[str] = None,
+    familia: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(100, le=500),
+):
+    if supabase_api.enabled():
+        filters = {"start": start, "end": end, "cliente": cliente, "produto": produto, "vendedor": vendedor, "cidade": cidade, "estado": estado, "familia": familia}
+        rows = supabase_store.client_metrics(filters, only_status=status)
+        return rows[:limit]
+    filters = {"start": start, "end": end, "cliente": cliente, "produto": produto, "vendedor": vendedor, "cidade": cidade, "estado": estado, "familia": familia}
+    return local_client_metrics(filters, only_status=status, limit=limit)
+
+
+@app.get("/api/clients")
+def clients(
+    q: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    cliente: Optional[str] = None,
+    produto: Optional[str] = None,
+    vendedor: Optional[str] = None,
+    cidade: Optional[str] = None,
+    estado: Optional[str] = None,
+    familia: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(1000, le=1000),
+):
+    if supabase_api.enabled():
+        filters = {
+            "start": start,
+            "end": end,
+            "cliente": cliente or q,
+            "produto": produto,
+            "vendedor": vendedor,
+            "cidade": cidade,
+            "estado": estado,
+            "familia": familia,
+        }
+        rows = supabase_store.clients(q=q, filters=filters, limit=None)
+        if status:
+            rows = [row for row in rows if row["status"] == status]
+        return rows[:limit]
+
+    params = []
+    where = ""
+    clauses = []
+    if q or cliente:
+        term = cliente or q
+        clauses.append("(c.razao_social LIKE ? OR c.nome_fantasia LIKE ? OR c.cnpj_cpf LIKE ?)")
+        params.extend([f"%{term}%", f"%{term}%", f"%{term}%"])
+    if cidade:
+        clauses.append("c.cidade = ?")
+        params.append(cidade)
+    if estado:
+        clauses.append("c.estado = ?")
+        params.append(estado)
+    if vendedor:
+        clauses.append("c.vendedor = ?")
+        params.append(vendedor)
+    if clauses:
+        where = "WHERE " + " AND ".join(clauses)
+    params.append(limit)
+    return rows(
+        f"""
+        SELECT c.id, c.razao_social, c.nome_fantasia, c.cnpj_cpf, c.endereco, c.cidade, c.estado, c.vendedor,
+               COALESCE(SUM(i.total_mercadoria), 0) AS total_comprado,
+               COUNT(DISTINCT p.id) AS pedidos,
+               MAX(COALESCE(p.data_faturamento, p.data_inclusao)) AS ultima_compra,
+               CASE WHEN COUNT(DISTINCT p.id) = 0 THEN 0
+                    ELSE COALESCE(SUM(i.total_mercadoria), 0) / COUNT(DISTINCT p.id)
+               END AS ticket_medio
+        FROM clientes c
+        LEFT JOIN pedidos p ON p.cliente_id = c.id
+        LEFT JOIN itens_pedido i ON i.pedido_id = p.id
+        {where}
+        GROUP BY c.id
+        ORDER BY total_comprado DESC
+        LIMIT ?
+        """,
+        params,
+    )
+
+
+@app.get("/api/clients/{client_id}")
+def client_detail(client_id: int):
+    if supabase_api.enabled():
+        data = supabase_store.client_detail(client_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+        return data
+
+    data = one(
+        """
+        SELECT c.id, c.razao_social, c.nome_fantasia, c.cnpj_cpf, c.endereco, c.cidade, c.estado, c.vendedor,
+               COALESCE(SUM(i.total_mercadoria), 0) AS total_comprado,
+               COUNT(DISTINCT p.id) AS pedidos,
+               MAX(COALESCE(p.data_faturamento, p.data_inclusao)) AS ultima_compra,
+               CASE WHEN COUNT(DISTINCT p.id) = 0 THEN 0
+                    ELSE COALESCE(SUM(i.total_mercadoria), 0) / COUNT(DISTINCT p.id)
+               END AS ticket_medio
+        FROM clientes c
+        LEFT JOIN pedidos p ON p.cliente_id = c.id
+        LEFT JOIN itens_pedido i ON i.pedido_id = p.id
+        WHERE c.id = ?
+        GROUP BY c.id
+        """,
+        (client_id,),
+    )
+    if not data:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+    return data
+
+
+@app.get("/api/clients/{client_id}/history")
+def client_history(client_id: int):
+    if supabase_api.enabled():
+        return supabase_store.client_history(client_id)
+
+    return rows(
+        """
+        SELECT pr.codigo, pr.descricao AS produto, pr.familia,
+               SUM(i.quantidade) AS quantidade_total,
+               SUM(i.total_mercadoria) AS valor_total,
+               COUNT(DISTINCT p.id) AS vezes_comprou,
+               MAX(COALESCE(p.data_faturamento, p.data_inclusao)) AS ultima_compra
+        FROM itens_pedido i
+        JOIN pedidos p ON p.id = i.pedido_id
+        JOIN produtos pr ON pr.id = i.produto_id
+        WHERE p.cliente_id = ?
+        GROUP BY pr.id
+        ORDER BY quantidade_total DESC
+        """,
+        (client_id,),
+    )
+
+
+@app.get("/api/clients/{client_id}/orders")
+def client_orders(client_id: int):
+    if supabase_api.enabled():
+        return supabase_store.client_orders(client_id)
+    return []
+
+
+@app.get("/api/orders")
+def orders(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    cliente: Optional[str] = None,
+    produto: Optional[str] = None,
+    vendedor: Optional[str] = None,
+    cidade: Optional[str] = None,
+    estado: Optional[str] = None,
+    familia: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(100, le=500),
+):
+    if supabase_api.enabled():
+        return supabase_store.orders({"start": start, "end": end, "cliente": cliente, "produto": produto, "vendedor": vendedor, "cidade": cidade, "estado": estado, "familia": familia, "status": status}, limit=limit)
+
+    where, params = filter_clause(start, end, cliente, produto, vendedor, cidade, estado, familia)
+    params.append(limit)
+    return rows(
+        f"""
+        SELECT p.numero AS pedido, nf.numero AS nota_fiscal,
+               COALESCE(nf.data_faturamento, p.data_faturamento, p.data_inclusao) AS data_faturamento,
+               c.razao_social AS cliente, c.nome_fantasia, c.cnpj_cpf,
+               pr.codigo AS codigo_produto, pr.descricao AS produto, pr.familia,
+               i.quantidade, i.valor_unitario, i.total_mercadoria,
+               nf.total_nota AS total_nota_fiscal
+        FROM itens_pedido i
+        JOIN pedidos p ON p.id = i.pedido_id
+        JOIN clientes c ON c.id = p.cliente_id
+        JOIN produtos pr ON pr.id = i.produto_id
+        LEFT JOIN notas_fiscais nf ON nf.id = i.nota_fiscal_id
+        {where}
+        ORDER BY data_faturamento DESC, p.numero DESC
+        LIMIT ?
+        """,
+        params,
+    )
+
+
+@app.get("/api/products")
+def products(
+    q: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    cliente: Optional[str] = None,
+    produto: Optional[str] = None,
+    vendedor: Optional[str] = None,
+    cidade: Optional[str] = None,
+    estado: Optional[str] = None,
+    familia: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(100, le=300),
+):
+    if supabase_api.enabled():
+        filters = {
+            "start": start,
+            "end": end,
+            "cliente": cliente,
+            "produto": produto or q,
+            "vendedor": vendedor,
+            "cidade": cidade,
+            "estado": estado,
+            "familia": familia,
+        }
+        return supabase_store.products(q=q, filters=filters, limit=limit)
+
+    where = ""
+    params = []
+    if q:
+        where = "WHERE pr.descricao LIKE ? OR pr.codigo LIKE ? OR pr.familia LIKE ?"
+        params = [f"%{q}%", f"%{q}%", f"%{q}%"]
+    params.append(limit)
+    return rows(
+        f"""
+        SELECT pr.id, pr.codigo, pr.descricao, pr.familia,
+               SUM(i.quantidade) AS quantidade_total,
+               SUM(i.total_mercadoria) AS valor_total,
+               COUNT(DISTINCT p.cliente_id) AS clientes,
+               MAX(COALESCE(p.data_faturamento, p.data_inclusao)) AS ultima_venda
+        FROM produtos pr
+        LEFT JOIN itens_pedido i ON i.produto_id = pr.id
+        LEFT JOIN pedidos p ON p.id = i.pedido_id
+        {where}
+        GROUP BY pr.id
+        ORDER BY quantidade_total DESC
+        LIMIT ?
+        """,
+        params,
+    )
+
+
+@app.get("/api/products/{product_id}/clients")
+def product_clients(product_id: int):
+    if supabase_api.enabled():
+        return supabase_store.product_clients(product_id)
+    return {"produto": None, "clientes": []}
+
+
+@app.get("/api/meta")
+def meta():
+    if supabase_api.enabled():
+        return supabase_store.meta()
+
+    return {
+        "vendedores": [r["vendedor"] for r in rows("SELECT DISTINCT vendedor FROM pedidos WHERE vendedor <> '' ORDER BY vendedor")],
+        "cidades": [r["cidade"] for r in rows("SELECT DISTINCT cidade FROM clientes WHERE cidade <> '' ORDER BY cidade")],
+        "estados": [r["estado"] for r in rows("SELECT DISTINCT estado FROM clientes WHERE estado <> '' ORDER BY estado")],
+        "familias": [r["familia"] for r in rows("SELECT DISTINCT familia FROM produtos WHERE familia <> '' ORDER BY familia")],
+    }
+
+
+static_dir = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if static_dir.exists():
+    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")

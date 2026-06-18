@@ -1,0 +1,30 @@
+# Environment and secrets
+.env
+*.env
+*.env.txt
+!*.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local data
+backend/data/
+*.sqlite
+*.db
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Codex/local assistants
+.claude/
