@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 import sqlite3
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from dotenv import load_dotenv
 
@@ -16,10 +16,24 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "compras.sqlite"
 load_dotenv(BASE_DIR / ".env")
+
+
+def normalize_database_url(value):
+    if "://" not in value or "@" not in value:
+        return value
+    scheme, remainder = value.split("://", 1)
+    credentials, host = remainder.rsplit("@", 1)
+    if ":" not in credentials:
+        return value
+    username, password = credentials.split(":", 1)
+    encoded_password = quote(unquote(password), safe="")
+    return f"{scheme}://{username}:{encoded_password}@{host}"
+
+
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip() or os.getenv("NEXT_PUBLIC_SUPABASE_URL", "").strip()
 SUPABASE_DB_PASSWORD = os.getenv("SUPABASE_DB_PASSWORD", "").strip()
 SUPABASE_DIRECT_DB_MODE = os.getenv("SUPABASE_DIRECT_DB_MODE", "").strip().lower() in {"1", "true", "yes", "sim"}
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+DATABASE_URL = normalize_database_url(os.getenv("DATABASE_URL", "").strip())
 if not DATABASE_URL and SUPABASE_DIRECT_DB_MODE and SUPABASE_URL and SUPABASE_DB_PASSWORD:
     project_ref = urlparse(SUPABASE_URL).hostname.split(".")[0]
     password = quote(SUPABASE_DB_PASSWORD, safe="")
@@ -85,6 +99,36 @@ def init_db():
             conn.executescript(POSTGRES_SCHEMA)
         else:
             conn.executescript(SQLITE_SCHEMA)
+        ensure_schema(conn)
+
+
+def ensure_schema(conn):
+    if conn.kind == "postgres":
+        exists = conn.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = 'clientes' AND column_name = 'endereco'
+            """
+        ).fetchone()
+        if not exists:
+            conn.execute("ALTER TABLE clientes ADD COLUMN endereco TEXT")
+        exists = conn.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = 'clientes' AND column_name = 'is_fornecedor'
+            """
+        ).fetchone()
+        if not exists:
+            conn.execute("ALTER TABLE clientes ADD COLUMN is_fornecedor BOOLEAN NOT NULL DEFAULT FALSE")
+        return
+
+    columns = conn.execute("PRAGMA table_info(clientes)").fetchall()
+    if "endereco" not in {column["name"] for column in columns}:
+        conn.execute("ALTER TABLE clientes ADD COLUMN endereco TEXT")
+    if "is_fornecedor" not in {column["name"] for column in columns}:
+        conn.execute("ALTER TABLE clientes ADD COLUMN is_fornecedor INTEGER NOT NULL DEFAULT 0")
 
 
 def reset_db(conn):
@@ -116,6 +160,8 @@ CREATE TABLE IF NOT EXISTS clientes (
     razao_social TEXT NOT NULL,
     nome_fantasia TEXT,
     cnpj_cpf TEXT NOT NULL UNIQUE,
+    endereco TEXT,
+    is_fornecedor INTEGER NOT NULL DEFAULT 0,
     cidade TEXT,
     estado TEXT,
     vendedor TEXT
@@ -181,6 +227,8 @@ CREATE TABLE IF NOT EXISTS clientes (
     razao_social TEXT NOT NULL,
     nome_fantasia TEXT,
     cnpj_cpf TEXT NOT NULL UNIQUE,
+    endereco TEXT,
+    is_fornecedor BOOLEAN NOT NULL DEFAULT FALSE,
     cidade TEXT,
     estado TEXT,
     vendedor TEXT

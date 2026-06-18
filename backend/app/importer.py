@@ -76,15 +76,26 @@ def validate_columns(headers):
         raise ValueError("Colunas obrigatórias ausentes: " + ", ".join(missing))
 
 
+def row_endereco(row):
+    return (
+        row.get("Endereço Completo")
+        or row.get("Endereco Completo")
+        or row.get("Entrega - Endereço Completo")
+        or row.get("Entrega - Endereco Completo")
+        or ""
+    )
+
+
 def upsert_cliente(conn, row):
     cnpj = row["CNPJ/CPF"] or "SEM-CNPJ-" + row["Cliente (Razão Social)"]
     conn.execute(
         """
-        INSERT INTO clientes (razao_social, nome_fantasia, cnpj_cpf, cidade, estado, vendedor)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO clientes (razao_social, nome_fantasia, cnpj_cpf, endereco, cidade, estado, vendedor)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(cnpj_cpf) DO UPDATE SET
             razao_social=excluded.razao_social,
             nome_fantasia=excluded.nome_fantasia,
+            endereco=excluded.endereco,
             cidade=excluded.cidade,
             estado=excluded.estado,
             vendedor=excluded.vendedor
@@ -93,6 +104,7 @@ def upsert_cliente(conn, row):
             row["Cliente (Razão Social)"],
             row["Cliente (Nome Fantasia)"],
             cnpj,
+            row_endereco(row),
             row["Cidade"],
             row["Estado"],
             row["Vendedor"],

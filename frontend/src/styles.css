@@ -26,6 +26,10 @@ select {
   grid-template-columns: 268px minmax(0, 1fr);
 }
 
+.app.sidebarHidden {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .sidebar {
   background: #101827;
   color: #f8fafc;
@@ -38,10 +42,18 @@ select {
   height: 100vh;
 }
 
+.sidebarHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .brand {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
 .brandLogo {
@@ -97,6 +109,47 @@ nav button.active {
   display: grid;
   gap: 20px;
   align-content: start;
+}
+
+.topbarTitle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.iconAction {
+  width: 38px;
+  height: 38px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #334155;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.iconAction:hover {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+
+.iconAction.dark {
+  width: 34px;
+  height: 34px;
+  border-color: #273449;
+  background: #172033;
+  color: #cad5e6;
+}
+
+.iconAction.dark:hover {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
 }
 
 .topbar {
@@ -301,6 +354,29 @@ select {
   background: #f1f5f9;
 }
 
+.linkAction {
+  min-width: 78px;
+  height: 30px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.linkAction:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #991b1b;
+}
+
+.linkAction:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
 .pagination {
   display: flex;
   align-items: center;
@@ -501,6 +577,13 @@ tr.clickable:hover td {
   outline: 0;
 }
 
+.importGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
 .import {
   background: #ffffff;
   border: 1px solid #dce4ef;
@@ -510,6 +593,7 @@ tr.clickable:hover td {
   gap: 14px;
   justify-items: start;
   max-width: 760px;
+  width: 100%;
 }
 
 .import p {
