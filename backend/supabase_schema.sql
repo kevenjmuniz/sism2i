@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS clientes (
     razao_social TEXT NOT NULL,
     nome_fantasia TEXT,
     cnpj_cpf TEXT NOT NULL UNIQUE,
+    endereco TEXT,
     cidade TEXT,
     estado TEXT,
     vendedor TEXT

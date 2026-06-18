@@ -85,6 +85,25 @@ def init_db():
             conn.executescript(POSTGRES_SCHEMA)
         else:
             conn.executescript(SQLITE_SCHEMA)
+        ensure_schema(conn)
+
+
+def ensure_schema(conn):
+    if conn.kind == "postgres":
+        exists = conn.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = 'clientes' AND column_name = 'endereco'
+            """
+        ).fetchone()
+        if not exists:
+            conn.execute("ALTER TABLE clientes ADD COLUMN endereco TEXT")
+        return
+
+    columns = conn.execute("PRAGMA table_info(clientes)").fetchall()
+    if "endereco" not in {column["name"] for column in columns}:
+        conn.execute("ALTER TABLE clientes ADD COLUMN endereco TEXT")
 
 
 def reset_db(conn):
@@ -116,6 +135,7 @@ CREATE TABLE IF NOT EXISTS clientes (
     razao_social TEXT NOT NULL,
     nome_fantasia TEXT,
     cnpj_cpf TEXT NOT NULL UNIQUE,
+    endereco TEXT,
     cidade TEXT,
     estado TEXT,
     vendedor TEXT
@@ -181,6 +201,7 @@ CREATE TABLE IF NOT EXISTS clientes (
     razao_social TEXT NOT NULL,
     nome_fantasia TEXT,
     cnpj_cpf TEXT NOT NULL UNIQUE,
+    endereco TEXT,
     cidade TEXT,
     estado TEXT,
     vendedor TEXT
