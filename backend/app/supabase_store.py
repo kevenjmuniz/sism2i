@@ -119,6 +119,10 @@ def match_text(value, term):
     return term.lower() in str(value or "").lower()
 
 
+def client_document(cliente):
+    return cliente.get("cnpj_cpf") or cliente.get("cnpj") or cliente.get("CNPJ/CPF") or cliente.get("CNPJ / CPF")
+
+
 def item_rows(filters=None):
     filters = filters or {}
     clientes, produtos, pedidos, notas, itens = snapshot()
@@ -137,7 +141,7 @@ def item_rows(filters=None):
         if filters.get("cliente") and not (
             match_text(cliente.get("razao_social"), filters["cliente"])
             or match_text(cliente.get("nome_fantasia"), filters["cliente"])
-            or match_text(cliente.get("cnpj_cpf"), filters["cliente"])
+            or match_text(client_document(cliente), filters["cliente"])
         ):
             continue
         if filters.get("cliente_id") and int(cliente.get("id") or 0) != int(filters["cliente_id"]):
@@ -179,7 +183,7 @@ def client_metrics(filters=None, q=None, limit=None, only_status=None, _rows=Non
         if q and not (
             match_text(cliente.get("razao_social"), q)
             or match_text(cliente.get("nome_fantasia"), q)
-            or match_text(cliente.get("cnpj_cpf"), q)
+            or match_text(client_document(cliente), q)
         ):
             continue
 
@@ -222,6 +226,7 @@ def client_metrics(filters=None, q=None, limit=None, only_status=None, _rows=Non
         )
         row = {
             **cliente,
+            "cnpj_cpf": client_document(cliente),
             "primeira_compra": first.isoformat() if first else None,
             "ultima_compra": last.isoformat() if last else None,
             "dias_sem_comprar": days_without,
@@ -370,7 +375,7 @@ def orders(filters, limit=100):
             "data_faturamento": r["data"],
             "cliente": r["cliente"].get("razao_social"),
             "nome_fantasia": r["cliente"].get("nome_fantasia"),
-            "cnpj_cpf": r["cliente"].get("cnpj_cpf"),
+            "cnpj_cpf": client_document(r["cliente"]),
             "codigo_produto": r["produto"].get("codigo"),
             "produto": r["produto"].get("descricao"),
             "familia": r["produto"].get("familia"),

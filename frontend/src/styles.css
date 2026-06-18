@@ -501,6 +501,13 @@ tr.clickable:hover td {
   outline: 0;
 }
 
+.importGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
 .import {
   background: #ffffff;
   border: 1px solid #dce4ef;
@@ -510,6 +517,7 @@ tr.clickable:hover td {
   gap: 14px;
   justify-items: start;
   max-width: 760px;
+  width: 100%;
 }
 
 .import p {

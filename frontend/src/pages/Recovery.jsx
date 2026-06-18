@@ -23,6 +23,7 @@ export function Recovery({ query, refresh }) {
         ["razao_social", "Cliente"],
         ["nome_fantasia", "Fantasia"],
         ["cnpj_cpf", "CNPJ/CPF"],
+        ["endereco", "Endereço"],
         ["cidade", "Cidade"],
         ["estado", "UF"],
         ["vendedor", "Vendedor"],
