@@ -9,7 +9,7 @@ import {
   UsersRound,
 } from "lucide-react";
 
-import { GlobalFilters } from "./components/GlobalFilters";
+import { GlobalFilters, FILTER_KEYS } from "./components/GlobalFilters";
 import { Dashboard } from "./pages/Dashboard";
 import { Recovery } from "./pages/Recovery";
 import { Clients } from "./pages/Clients";
@@ -36,6 +36,16 @@ const blankFilters = {
   dias_max: "",
   valor_min: "",
 };
+
+const PAGES_WITHOUT_FILTERS = ["dashboard", "produtos", "importar"];
+const ORDERS_FILTER_FIELDS = FILTER_KEYS.filter(
+  (key) => !["dias_min", "dias_max", "valor_min"].includes(key)
+);
+
+function filterFieldsForPage(page) {
+  if (page === "pedidos") return ORDERS_FILTER_FIELDS;
+  return FILTER_KEYS;
+}
 
 const nav = [
   ["dashboard", LayoutDashboard, "Dashboard"],
@@ -139,7 +149,7 @@ function App() {
           <button className="secondaryAction" onClick={async () => { await api("/api/auth/logout", { method: "POST" }); clearDataCache(); setAuth({ checking: false, authenticated: false, error: "" }); }}>Sair</button>
         </header>
 
-        {page !== "importar" && (
+        {!PAGES_WITHOUT_FILTERS.includes(page) && (
           <GlobalFilters
             filters={draftFilters}
             setFilters={setDraftFilters}
@@ -147,6 +157,7 @@ function App() {
             meta={meta.data || {}}
             onApply={handleApply}
             onClear={handleClear}
+            fields={filterFieldsForPage(page)}
           />
         )}
 

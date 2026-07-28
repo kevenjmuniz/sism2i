@@ -9,7 +9,7 @@ const periodOptions = [
 
 const STATUS_OPTIONS = ["Ativo", "Atenção", "Inativo", "Perdido"];
 
-const FILTER_KEYS = [
+export const FILTER_KEYS = [
   "start",
   "end",
   "status",
@@ -28,8 +28,8 @@ function formatDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
-function countActive(filters) {
-  return FILTER_KEYS.reduce((count, key) => count + (filters[key] ? 1 : 0), 0);
+function countActive(filters, keys) {
+  return keys.reduce((count, key) => count + (filters[key] ? 1 : 0), 0);
 }
 
 function Select({ label, value, options = [], onChange }) {
@@ -69,7 +69,8 @@ function StatusMultiSelect({ value, onChange }) {
   );
 }
 
-export function GlobalFilters({ filters, setFilters, appliedFilters, meta, onApply, onClear }) {
+export function GlobalFilters({ filters, setFilters, appliedFilters, meta, onApply, onClear, fields = FILTER_KEYS }) {
+  const show = (key) => fields.includes(key);
   const update = (key, value) => setFilters((prev) => ({ ...prev, [key]: value }));
 
   function updateDate(key, value) {
@@ -103,8 +104,8 @@ export function GlobalFilters({ filters, setFilters, appliedFilters, meta, onApp
   }
 
   const dateError = filters.start && filters.end && filters.start > filters.end;
-  const dirty = FILTER_KEYS.some((key) => (filters[key] || "") !== (appliedFilters?.[key] || ""));
-  const activeCount = appliedFilters ? countActive(appliedFilters) : 0;
+  const dirty = fields.some((key) => (filters[key] || "") !== (appliedFilters?.[key] || ""));
+  const activeCount = appliedFilters ? countActive(appliedFilters, fields) : 0;
 
   return (
     <section className="filters" onKeyDown={handleKeyDown}>
@@ -113,112 +114,138 @@ export function GlobalFilters({ filters, setFilters, appliedFilters, meta, onApp
           {activeCount > 0 && <span className="filterCount">{activeCount} filtro(s) aplicado(s)</span>}
           {dirty && <span className="filterDirty">Alterações não aplicadas</span>}
         </div>
-        <button type="button" className="presetBtn" onClick={applyRecoveryPreset}>
-          Recuperação prioritária
-        </button>
+        {show("status") && (
+          <button type="button" className="presetBtn" onClick={applyRecoveryPreset}>
+            Recuperação prioritária
+          </button>
+        )}
       </div>
       <div className="filtersGrid">
-        <label>
-          Atalho de periodo
-          <select value={filters.periodPreset} onChange={(e) => updatePeriodPreset(e.target.value)}>
-            <option value="">Personalizado</option>
-            {periodOptions.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Período inicial
-          <input
-            type="date"
-            value={filters.start}
-            onChange={(e) => updateDate("start", e.target.value)}
-            aria-invalid={dateError ? "true" : "false"}
+        {(show("start") || show("end")) && (
+          <label>
+            Atalho de periodo
+            <select value={filters.periodPreset} onChange={(e) => updatePeriodPreset(e.target.value)}>
+              <option value="">Personalizado</option>
+              {periodOptions.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {show("start") && (
+          <label>
+            Período inicial
+            <input
+              type="date"
+              value={filters.start}
+              onChange={(e) => updateDate("start", e.target.value)}
+              aria-invalid={dateError ? "true" : "false"}
+            />
+          </label>
+        )}
+        {show("end") && (
+          <label>
+            Período final
+            <input
+              type="date"
+              value={filters.end}
+              onChange={(e) => updateDate("end", e.target.value)}
+              aria-invalid={dateError ? "true" : "false"}
+            />
+          </label>
+        )}
+        {show("cliente") && (
+          <label>
+            Cliente
+            <input
+              value={filters.cliente || ""}
+              onChange={(e) => update("cliente", e.target.value)}
+              placeholder="Razão social, fantasia ou CNPJ"
+            />
+          </label>
+        )}
+        {show("status") && <StatusMultiSelect value={filters.status} onChange={(v) => update("status", v)} />}
+        {show("vendedor") && (
+          <Select
+            label="Vendedor"
+            value={filters.vendedor}
+            options={meta.vendedores}
+            onChange={(v) => update("vendedor", v)}
           />
-        </label>
-        <label>
-          Período final
-          <input
-            type="date"
-            value={filters.end}
-            onChange={(e) => updateDate("end", e.target.value)}
-            aria-invalid={dateError ? "true" : "false"}
+        )}
+        {show("cidade") && (
+          <Select
+            label="Cidade"
+            value={filters.cidade}
+            options={meta.cidades}
+            onChange={(v) => update("cidade", v)}
           />
-        </label>
-        <label>
-          Cliente
-          <input
-            value={filters.cliente || ""}
-            onChange={(e) => update("cliente", e.target.value)}
-            placeholder="Razão social, fantasia ou CNPJ"
+        )}
+        {show("estado") && (
+          <Select
+            label="Estado"
+            value={filters.estado}
+            options={meta.estados}
+            onChange={(v) => update("estado", v)}
           />
-        </label>
-        <StatusMultiSelect value={filters.status} onChange={(v) => update("status", v)} />
-        <Select
-          label="Vendedor"
-          value={filters.vendedor}
-          options={meta.vendedores}
-          onChange={(v) => update("vendedor", v)}
-        />
-        <Select
-          label="Cidade"
-          value={filters.cidade}
-          options={meta.cidades}
-          onChange={(v) => update("cidade", v)}
-        />
-        <Select
-          label="Estado"
-          value={filters.estado}
-          options={meta.estados}
-          onChange={(v) => update("estado", v)}
-        />
-        <label>
-          Produto
-          <input
-            value={filters.produto}
-            onChange={(e) => update("produto", e.target.value)}
-            placeholder="Produto ou código"
+        )}
+        {show("produto") && (
+          <label>
+            Produto
+            <input
+              value={filters.produto}
+              onChange={(e) => update("produto", e.target.value)}
+              placeholder="Produto ou código"
+            />
+          </label>
+        )}
+        {show("familia") && (
+          <Select
+            label="Família"
+            value={filters.familia}
+            options={meta.familias}
+            onChange={(v) => update("familia", v)}
           />
-        </label>
-        <Select
-          label="Família"
-          value={filters.familia}
-          options={meta.familias}
-          onChange={(v) => update("familia", v)}
-        />
-        <label>
-          Dias sem comprar (mín.)
-          <input
-            type="number"
-            min="0"
-            value={filters.dias_min || ""}
-            onChange={(e) => update("dias_min", e.target.value)}
-            placeholder="Ex: 60"
-          />
-        </label>
-        <label>
-          Dias sem comprar (máx.)
-          <input
-            type="number"
-            min="0"
-            value={filters.dias_max || ""}
-            onChange={(e) => update("dias_max", e.target.value)}
-            placeholder="Ex: 120"
-          />
-        </label>
-        <label>
-          Valor total comprado (mín.)
-          <input
-            type="number"
-            min="0"
-            step="100"
-            value={filters.valor_min || ""}
-            onChange={(e) => update("valor_min", e.target.value)}
-            placeholder="Ex: 10000"
-          />
-        </label>
+        )}
+        {show("dias_min") && (
+          <label>
+            Dias sem comprar (mín.)
+            <input
+              type="number"
+              min="0"
+              value={filters.dias_min || ""}
+              onChange={(e) => update("dias_min", e.target.value)}
+              placeholder="Ex: 60"
+            />
+          </label>
+        )}
+        {show("dias_max") && (
+          <label>
+            Dias sem comprar (máx.)
+            <input
+              type="number"
+              min="0"
+              value={filters.dias_max || ""}
+              onChange={(e) => update("dias_max", e.target.value)}
+              placeholder="Ex: 120"
+            />
+          </label>
+        )}
+        {show("valor_min") && (
+          <label>
+            Valor total comprado (mín.)
+            <input
+              type="number"
+              min="0"
+              step="100"
+              value={filters.valor_min || ""}
+              onChange={(e) => update("valor_min", e.target.value)}
+              placeholder="Ex: 10000"
+            />
+          </label>
+        )}
       </div>
       {dateError && (
         <p className="filterError" role="alert">
