@@ -58,10 +58,20 @@ export function Table({ title, rows = [], columns, onRowClick, filename }) {
           <thead>
             <tr>
               {columns.map(([key, label]) => (
-                <th key={label}>
-                  <button className="sortHeader" onClick={() => handleSort(key)} title="Ordenar">
+                <th
+                  key={label}
+                  aria-sort={
+                    sort.key === key ? (sort.direction === "asc" ? "ascending" : "descending") : "none"
+                  }
+                >
+                  <button
+                    className="sortHeader"
+                    onClick={() => handleSort(key)}
+                    title={`Ordenar por ${label}`}
+                    aria-label={`Ordenar por ${label}`}
+                  >
                     {label}
-                    <span>{sort.key === key ? (sort.direction === "desc" ? "↓" : "↑") : "↕"}</span>
+                    <span aria-hidden="true">{sort.key === key ? (sort.direction === "desc" ? "↓" : "↑") : "↕"}</span>
                   </button>
                 </th>
               ))}
@@ -92,7 +102,7 @@ export function Table({ title, rows = [], columns, onRowClick, filename }) {
           <button disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
             ← Anterior
           </button>
-          <span>
+          <span aria-live="polite">
             Página {page + 1} de {pages}
           </span>
           <button disabled={page >= pages - 1} onClick={() => setPage((p) => p + 1)}>

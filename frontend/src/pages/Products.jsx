@@ -1,12 +1,9 @@
 import React, { useState } from "react";
 import { Table } from "../components/Table";
 import { SearchBox } from "../components/SearchBox";
+import { Empty } from "../components/Empty";
 import { useData } from "../hooks";
 import { money, number } from "../utils";
-
-function Empty({ text }) {
-  return <section className="panel empty">{text}</section>;
-}
 
 export function Products({ query, refresh }) {
   const [draft, setDraft] = useState("");
@@ -16,10 +13,7 @@ export function Products({ query, refresh }) {
     `/api/products?${query}&q=${encodeURIComponent(q)}&limit=300`,
     [query, q, refresh]
   );
-  const detail = useData(
-    selected ? `/api/products/${selected}/clients` : "/api/products?limit=0",
-    [selected]
-  );
+  const detail = useData(selected ? `/api/products/${selected}/clients` : "", [selected]);
 
   return (
     <div className="stack">
@@ -32,7 +26,7 @@ export function Products({ query, refresh }) {
       {loading ? (
         <Empty text="Carregando produtos..." />
       ) : error ? (
-        <Empty text={error} />
+        <Empty text={error} tone="error" />
       ) : (
         <Table
           title="Produtos"

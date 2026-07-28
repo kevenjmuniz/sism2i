@@ -29,8 +29,12 @@ const blankFilters = {
   vendedor: "",
   cidade: "",
   estado: "",
+  cliente: "",
   produto: "",
   familia: "",
+  dias_min: "",
+  dias_max: "",
+  valor_min: "",
 };
 
 const nav = [
@@ -42,11 +46,23 @@ const nav = [
   ["importar", FileUp, "Importar CSV"],
 ];
 
+function filtersFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const next = { ...blankFilters };
+  Object.keys(blankFilters).forEach((key) => {
+    const value = params.get(key);
+    if (value) next[key] = value;
+  });
+  const pageParam = params.get("page");
+  return { filters: next, page: pageParam && nav.some(([id]) => id === pageParam) ? pageParam : "dashboard" };
+}
+
 function App() {
+  const initial = useMemo(filtersFromUrl, []);
   const [auth, setAuth] = useState({ checking: true, authenticated: false, error: "" });
-  const [page, setPage] = useState("dashboard");
-  const [draftFilters, setDraftFilters] = useState(blankFilters);
-  const [filters, setFilters] = useState(blankFilters);
+  const [page, setPage] = useState(initial.page);
+  const [draftFilters, setDraftFilters] = useState(initial.filters);
+  const [filters, setFilters] = useState(initial.filters);
   const [refresh, setRefresh] = useState(0);
 
   React.useEffect(() => {
@@ -54,6 +70,16 @@ function App() {
       .then((data) => setAuth({ checking: false, authenticated: data.authenticated, error: "" }))
       .catch(() => setAuth({ checking: false, authenticated: false, error: "" }));
   }, []);
+
+  React.useEffect(() => {
+    const params = new URLSearchParams();
+    params.set("page", page);
+    Object.entries(filters).forEach(([key, value]) => {
+      if (key !== "periodPreset" && value) params.set(key, value);
+    });
+    const next = `${window.location.pathname}?${params.toString()}`;
+    window.history.replaceState(null, "", next);
+  }, [page, filters]);
 
   const meta = useData(auth.authenticated ? `/api/meta` : "", [refresh, auth.authenticated]);
   const query = useMemo(() => qs(filters), [filters]);
@@ -63,8 +89,8 @@ function App() {
     setRefresh((v) => v + 1);
   }
 
-  function handleApply() {
-    setFilters(draftFilters);
+  function handleApply(override) {
+    setFilters(override || draftFilters);
   }
 
   function handleClear() {
@@ -95,6 +121,7 @@ function App() {
             <button
               className={page === id ? "active" : ""}
               key={id}
+              aria-current={page === id ? "page" : undefined}
               onClick={() => setPage(id)}
             >
               <Icon size={18} />
@@ -116,6 +143,7 @@ function App() {
           <GlobalFilters
             filters={draftFilters}
             setFilters={setDraftFilters}
+            appliedFilters={filters}
             meta={meta.data || {}}
             onApply={handleApply}
             onClear={handleClear}
@@ -168,10 +196,10 @@ function Login({ onLogin }) {
             <span>Acesso ao sistema</span>
           </div>
         </div>
-        <label>Usuário<input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus /></label>
-        <label>Senha<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>
+        <label>Usuário<input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus aria-invalid={error ? "true" : "false"} /></label>
+        <label>Senha<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} aria-invalid={error ? "true" : "false"} /></label>
         <button className="primaryAction" disabled={loading}>{loading ? "Entrando..." : "Entrar"}</button>
-        {error && <p className="loginError">{error}</p>}
+        {error && <p className="loginError" role="alert">{error}</p>}
       </form>
     </div>
   );

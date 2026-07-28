@@ -3,12 +3,9 @@ import { X } from "lucide-react";
 import { Table } from "../components/Table";
 import { SearchBox } from "../components/SearchBox";
 import { StatusBadge } from "../components/StatusBadge";
+import { Empty } from "../components/Empty";
 import { useData } from "../hooks";
 import { money, days, number, frequency } from "../utils";
-
-function Empty({ text }) {
-  return <section className="panel empty">{text}</section>;
-}
 
 function ClientAnalysis({ clientId, onClose }) {
   const detail = useData(`/api/clients/${clientId}`, [clientId]);
@@ -16,7 +13,7 @@ function ClientAnalysis({ clientId, onClose }) {
   const orders = useData(`/api/clients/${clientId}/orders`, [clientId]);
 
   if (detail.loading) return <Empty text="Abrindo análise do cliente..." />;
-  if (detail.error) return <Empty text={detail.error} />;
+  if (detail.error) return <Empty text={detail.error} tone="error" />;
 
   const c = detail.data;
   return (

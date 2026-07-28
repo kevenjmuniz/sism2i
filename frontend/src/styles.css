@@ -128,9 +128,105 @@ h1 {
   border-radius: 8px;
   padding: 14px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(150px, 1fr));
   gap: 12px;
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+}
+
+.filtersGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.filtersTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.filtersInfo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.filterCount {
+  font-size: 12px;
+  font-weight: 700;
+  color: #2563eb;
+  background: #eff6ff;
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+
+.filterDirty {
+  font-size: 12px;
+  font-weight: 700;
+  color: #92400e;
+  background: #fef3c7;
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+
+.filterError {
+  color: #b91c1c;
+  font-weight: 700;
+  font-size: 12px;
+  margin: 0;
+}
+
+.presetBtn {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid #93c5fd;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.presetBtn:hover {
+  background: #dbeafe;
+}
+
+.statusMulti {
+  display: grid;
+  gap: 6px;
+}
+
+.statusMultiLabel {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.statusMultiOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  height: 38px;
+}
+
+.statusMultiOption {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+  text-transform: none;
+}
+
+.statusMultiOption input {
+  width: 14px;
+  height: 14px;
 }
 
 .filterActions {
@@ -542,6 +638,39 @@ tr.clickable:hover td {
 
 .empty {
   color: #64748b;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.empty.error {
+  color: #b91c1c;
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid #cbd5e1;
+  border-top-color: #2563eb;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.statusOk {
+  color: #166534;
+}
+
+.statusError {
+  color: #b91c1c;
 }
 
 .loginPage {
@@ -598,11 +727,11 @@ tr.clickable:hover td {
   }
 
   nav {
-    grid-template-columns: repeat(5, minmax(120px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     overflow-x: auto;
   }
 
-  .filters,
+  .filtersGrid,
   .cards,
   .grid2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -615,7 +744,7 @@ tr.clickable:hover td {
   }
 
   nav,
-  .filters,
+  .filtersGrid,
   .cards,
   .grid2 {
     grid-template-columns: 1fr;

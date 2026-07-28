@@ -1,20 +1,25 @@
 import React from "react";
 import { Chart } from "../components/Chart";
 import { Table } from "../components/Table";
+import { Empty } from "../components/Empty";
 import { useData } from "../hooks";
 import { money, number } from "../utils";
-
-function Empty({ text }) {
-  return <section className="panel empty">{text}</section>;
-}
 
 export function Dashboard({ query, refresh }) {
   const { data, loading, error } = useData(`/api/dashboard?${query}`, [query, refresh]);
 
   if (loading) return <Empty text="Carregando dashboard..." />;
-  if (error) return <Empty text={error} />;
+  if (error) return <Empty text={error} tone="error" />;
 
   const s = data.summary;
+  if (!s.clientes && !s.pedidos) {
+    return (
+      <Empty
+        text="Nenhum dado importado ainda. Vá até 'Importar CSV' para carregar o histórico de vendas."
+        tone="empty"
+      />
+    );
+  }
   const cards = [
     ["Total de clientes", number(s.clientes)],
     ["Ativos", number(s.clientes_ativos ?? 0), "green"],

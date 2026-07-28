@@ -5,24 +5,24 @@ import { api, number } from "../utils";
 export function ImportCsv({ onDone }) {
   const [file, setFile] = useState(null);
   const [clientFile, setClientFile] = useState(null);
-  const [status, setStatus] = useState("");
-  const [clientStatus, setClientStatus] = useState("");
+  const [status, setStatus] = useState({ text: "", ok: true });
+  const [clientStatus, setClientStatus] = useState({ text: "", ok: true });
   const [loading, setLoading] = useState(false);
   const [clientLoading, setClientLoading] = useState(false);
 
   async function send() {
     if (!file) return;
     setLoading(true);
-    setStatus("");
+    setStatus({ text: "", ok: true });
     const form = new FormData();
     form.append("file", file);
     try {
       const result = await api("/api/import", { method: "POST", body: form });
-      setStatus(`Importação concluída: ${number(result.imported_items)} itens gravados.`);
+      setStatus({ text: `Importação concluída: ${number(result.imported_items)} itens gravados.`, ok: true });
       setFile(null);
       onDone();
     } catch (err) {
-      setStatus(err.message);
+      setStatus({ text: err.message, ok: false });
     } finally {
       setLoading(false);
     }
@@ -31,18 +31,19 @@ export function ImportCsv({ onDone }) {
   async function sendClientAddresses() {
     if (!clientFile) return;
     setClientLoading(true);
-    setClientStatus("");
+    setClientStatus({ text: "", ok: true });
     const form = new FormData();
     form.append("file", clientFile);
     try {
       const result = await api("/api/import/client-addresses", { method: "POST", body: form });
-      setClientStatus(
-        `Endereços atualizados: ${number(result.updated)} clientes. Encontrados no sistema: ${number(result.matched)}. Sem endereço no CSV: ${number(result.skipped_without_address)}.`
-      );
+      setClientStatus({
+        text: `Endereços atualizados: ${number(result.updated)} clientes. Encontrados no sistema: ${number(result.matched)}. Sem endereço no CSV: ${number(result.skipped_without_address)}.`,
+        ok: true,
+      });
       setClientFile(null);
       onDone();
     } catch (err) {
-      setClientStatus(err.message);
+      setClientStatus({ text: err.message, ok: false });
     } finally {
       setClientLoading(false);
     }
@@ -58,7 +59,11 @@ export function ImportCsv({ onDone }) {
         <button disabled={!file || loading} onClick={send}>
           {loading ? "Importando..." : "Importar vendas"}
         </button>
-        {status && <strong>{status}</strong>}
+        {status.text && (
+          <strong className={status.ok ? "statusOk" : "statusError"} role={status.ok ? "status" : "alert"}>
+            {status.text}
+          </strong>
+        )}
       </section>
 
       <section className="import">
@@ -69,7 +74,11 @@ export function ImportCsv({ onDone }) {
         <button disabled={!clientFile || clientLoading} onClick={sendClientAddresses}>
           {clientLoading ? "Atualizando..." : "Atualizar endereços"}
         </button>
-        {clientStatus && <strong>{clientStatus}</strong>}
+        {clientStatus.text && (
+          <strong className={clientStatus.ok ? "statusOk" : "statusError"} role={clientStatus.ok ? "status" : "alert"}>
+            {clientStatus.text}
+          </strong>
+        )}
       </section>
     </div>
   );

@@ -13,7 +13,7 @@ from fastapi import FastAPI, File, HTTPException, Query, Request, Response, Uplo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .db import get_connection, init_db
+from .db import BASE_DIR, get_connection, init_db
 from .client_address_importer import import_client_addresses_upload
 from .importer import import_csv, import_upload
 from . import supabase_api
@@ -36,9 +36,42 @@ app.add_middleware(
 
 AUTH_USERNAME = os.getenv("AUTH_USERNAME", "admin")
 AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "admin")
-AUTH_SECRET = os.getenv("AUTH_SECRET") or os.getenv("SUPABASE_PUBLISHABLE_KEY") or secrets.token_urlsafe(32)
+AUTH_SECRET = os.getenv("AUTH_SECRET")
+if not AUTH_SECRET:
+    AUTH_SECRET = secrets.token_urlsafe(32)
+    print(
+        "AVISO: AUTH_SECRET nao definido em backend/.env — usando um segredo aleatorio "
+        "gerado a cada reinicio do processo. Isso invalida sessoes existentes a cada deploy "
+        "e nao funciona corretamente com mais de um worker. Defina AUTH_SECRET em producao."
+    )
 SESSION_COOKIE = "historico_session"
 SESSION_TTL_SECONDS = 60 * 60 * 12
+
+IMPORT_ALLOWED_DIR = Path(os.getenv("IMPORT_ALLOWED_DIR", str(BASE_DIR / "imports"))).resolve()
+IMPORT_ALLOWED_DIR.mkdir(parents=True, exist_ok=True)
+
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_WINDOW_SECONDS = 300
+_login_attempts: dict = {}
+
+
+def _client_ip(request: Request):
+    return request.client.host if request.client else "unknown"
+
+
+def _check_login_rate_limit(ip):
+    now = time.time()
+    attempts = [t for t in _login_attempts.get(ip, []) if now - t < LOGIN_WINDOW_SECONDS]
+    _login_attempts[ip] = attempts
+    if len(attempts) >= LOGIN_MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=429,
+            detail="Muitas tentativas de login. Aguarde alguns minutos e tente novamente.",
+        )
+
+
+def _record_failed_login(ip):
+    _login_attempts.setdefault(ip, []).append(time.time())
 
 
 def make_session_token(username):
@@ -80,11 +113,18 @@ async def require_login(request: Request, call_next):
 
 @app.post("/api/auth/login")
 async def login(request: Request, response: Response):
-    data = await request.json()
+    ip = _client_ip(request)
+    _check_login_rate_limit(ip)
+    try:
+        data = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Corpo da requisição inválido.") from exc
     username = str(data.get("username", ""))
     password = str(data.get("password", ""))
     if not (hmac.compare_digest(username, AUTH_USERNAME) and hmac.compare_digest(password, AUTH_PASSWORD)):
+        _record_failed_login(ip)
         raise HTTPException(status_code=401, detail="Usuário ou senha inválidos.")
+    _login_attempts.pop(ip, None)
     response.set_cookie(
         SESSION_COOKIE,
         make_session_token(username),
@@ -141,6 +181,7 @@ def filter_clause(
     cidade: Optional[str] = None,
     estado: Optional[str] = None,
     familia: Optional[str] = None,
+    cliente_id: Optional[int] = None,
 ):
     clauses = []
     params = []
@@ -151,6 +192,9 @@ def filter_clause(
     if end:
         clauses.append(f"{date_expr} <= ?")
         params.append(end)
+    if cliente_id:
+        clauses.append("c.id = ?")
+        params.append(cliente_id)
     if cliente:
         clauses.append("(c.razao_social LIKE ? OR c.nome_fantasia LIKE ? OR c.cnpj_cpf LIKE ?)")
         params.extend([f"%{cliente}%", f"%{cliente}%", f"%{cliente}%"])
@@ -202,7 +246,8 @@ def parse_local_date(value):
     return datetime.strptime(value[:10], "%Y-%m-%d").date()
 
 
-def local_client_metrics(filters, only_status=None, limit=100):
+def local_client_metrics(filters, only_status=None, limit=100, dias_min=None, dias_max=None, valor_min=None):
+    statuses = supabase_store.status_set(only_status)
     where, params = filter_clause(**filters)
     data = rows(
         f"""
@@ -268,13 +313,7 @@ def local_client_metrics(filters, only_status=None, limit=100):
         current_status = supabase_store.status_from(days_without, avg_frequency, order_count)
         top_products = sorted(entry["products"].values(), key=lambda p: p["quantidade"], reverse=True)
         product_names = ", ".join([p["produto"] for p in top_products[:3] if p["produto"]])
-        priority = (
-            (days_without or 0) * 1.4
-            + (entry["total"] / 10000)
-            + (ticket / 1500)
-            + ((90 / avg_frequency) if avg_frequency and avg_frequency > 0 else 0)
-            + supabase_store.status_rank(current_status) * 20
-        )
+        priority = supabase_store.compute_priority(days_without, entry["total"], ticket, avg_frequency, current_status)
         row = {
             **cliente,
             "primeira_compra": first.isoformat() if first else None,
@@ -289,7 +328,13 @@ def local_client_metrics(filters, only_status=None, limit=100):
             "produtos_recorrentes": product_names,
             "prioridade": priority,
         }
-        if only_status and row["status"] != only_status:
+        if statuses and row["status"] not in statuses:
+            continue
+        if dias_min is not None and (row["dias_sem_comprar"] is None or row["dias_sem_comprar"] < dias_min):
+            continue
+        if dias_max is not None and (row["dias_sem_comprar"] is None or row["dias_sem_comprar"] > dias_max):
+            continue
+        if valor_min is not None and row["total_comprado"] < valor_min:
             continue
         result.append(row)
 
@@ -326,7 +371,17 @@ async def upload_client_addresses_csv(file: UploadFile = File(...)):
 
 @app.post("/api/import/local")
 def import_local(path: str):
-    resolved = Path(path).resolve()
+    if not path or not path.strip():
+        raise HTTPException(status_code=400, detail="Informe o caminho do arquivo.")
+    candidate = Path(path)
+    resolved = candidate.resolve() if candidate.is_absolute() else (IMPORT_ALLOWED_DIR / candidate).resolve()
+    try:
+        resolved.relative_to(IMPORT_ALLOWED_DIR)
+    except ValueError:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Por segurança, só é permitido importar arquivos dentro de {IMPORT_ALLOWED_DIR}.",
+        )
     if resolved.suffix.lower() != ".csv":
         raise HTTPException(status_code=400, detail="Apenas arquivos CSV são permitidos.")
     try:
@@ -428,14 +483,20 @@ def recovery(
     estado: Optional[str] = None,
     familia: Optional[str] = None,
     status: Optional[str] = None,
+    dias_min: Optional[int] = None,
+    dias_max: Optional[int] = None,
+    valor_min: Optional[float] = None,
     limit: int = Query(100, le=500),
 ):
-    if supabase_api.enabled():
-        filters = {"start": start, "end": end, "cliente": cliente, "produto": produto, "vendedor": vendedor, "cidade": cidade, "estado": estado, "familia": familia}
-        rows = supabase_store.client_metrics(filters, only_status=status)
-        return rows[:limit]
     filters = {"start": start, "end": end, "cliente": cliente, "produto": produto, "vendedor": vendedor, "cidade": cidade, "estado": estado, "familia": familia}
-    return local_client_metrics(filters, only_status=status, limit=limit)
+    if supabase_api.enabled():
+        rows = supabase_store.client_metrics(
+            filters, only_status=status, dias_min=dias_min, dias_max=dias_max, valor_min=valor_min
+        )
+        return rows[:limit]
+    return local_client_metrics(
+        filters, only_status=status, limit=limit, dias_min=dias_min, dias_max=dias_max, valor_min=valor_min
+    )
 
 
 @app.get("/api/clients")
@@ -450,61 +511,29 @@ def clients(
     estado: Optional[str] = None,
     familia: Optional[str] = None,
     status: Optional[str] = None,
+    dias_min: Optional[int] = None,
+    dias_max: Optional[int] = None,
+    valor_min: Optional[float] = None,
     limit: int = Query(1000, le=1000),
 ):
+    filters = {
+        "start": start,
+        "end": end,
+        "cliente": cliente or q,
+        "produto": produto,
+        "vendedor": vendedor,
+        "cidade": cidade,
+        "estado": estado,
+        "familia": familia,
+    }
     if supabase_api.enabled():
-        filters = {
-            "start": start,
-            "end": end,
-            "cliente": cliente or q,
-            "produto": produto,
-            "vendedor": vendedor,
-            "cidade": cidade,
-            "estado": estado,
-            "familia": familia,
-        }
-        rows = supabase_store.clients(q=q, filters=filters, limit=None)
-        if status:
-            rows = [row for row in rows if row["status"] == status]
+        rows = supabase_store.clients(
+            q=q, filters=filters, limit=None, only_status=status, dias_min=dias_min, dias_max=dias_max, valor_min=valor_min
+        )
         return rows[:limit]
 
-    params = []
-    where = ""
-    clauses = []
-    if q or cliente:
-        term = cliente or q
-        clauses.append("(c.razao_social LIKE ? OR c.nome_fantasia LIKE ? OR c.cnpj_cpf LIKE ?)")
-        params.extend([f"%{term}%", f"%{term}%", f"%{term}%"])
-    if cidade:
-        clauses.append("c.cidade = ?")
-        params.append(cidade)
-    if estado:
-        clauses.append("c.estado = ?")
-        params.append(estado)
-    if vendedor:
-        clauses.append("c.vendedor = ?")
-        params.append(vendedor)
-    if clauses:
-        where = "WHERE " + " AND ".join(clauses)
-    params.append(limit)
-    return rows(
-        f"""
-        SELECT c.id, c.razao_social, c.nome_fantasia, c.cnpj_cpf, c.endereco, c.cidade, c.estado, c.vendedor,
-               COALESCE(SUM(i.total_mercadoria), 0) AS total_comprado,
-               COUNT(DISTINCT p.id) AS pedidos,
-               MAX(COALESCE(p.data_faturamento, p.data_inclusao)) AS ultima_compra,
-               CASE WHEN COUNT(DISTINCT p.id) = 0 THEN 0
-                    ELSE COALESCE(SUM(i.total_mercadoria), 0) / COUNT(DISTINCT p.id)
-               END AS ticket_medio
-        FROM clientes c
-        LEFT JOIN pedidos p ON p.cliente_id = c.id
-        LEFT JOIN itens_pedido i ON i.pedido_id = p.id
-        {where}
-        GROUP BY c.id
-        ORDER BY total_comprado DESC
-        LIMIT ?
-        """,
-        params,
+    return local_client_metrics(
+        filters, only_status=status, limit=limit, dias_min=dias_min, dias_max=dias_max, valor_min=valor_min
     )
 
 
@@ -516,26 +545,10 @@ def client_detail(client_id: int):
             raise HTTPException(status_code=404, detail="Cliente não encontrado.")
         return data
 
-    data = one(
-        """
-        SELECT c.id, c.razao_social, c.nome_fantasia, c.cnpj_cpf, c.endereco, c.cidade, c.estado, c.vendedor,
-               COALESCE(SUM(i.total_mercadoria), 0) AS total_comprado,
-               COUNT(DISTINCT p.id) AS pedidos,
-               MAX(COALESCE(p.data_faturamento, p.data_inclusao)) AS ultima_compra,
-               CASE WHEN COUNT(DISTINCT p.id) = 0 THEN 0
-                    ELSE COALESCE(SUM(i.total_mercadoria), 0) / COUNT(DISTINCT p.id)
-               END AS ticket_medio
-        FROM clientes c
-        LEFT JOIN pedidos p ON p.cliente_id = c.id
-        LEFT JOIN itens_pedido i ON i.pedido_id = p.id
-        WHERE c.id = ?
-        GROUP BY c.id
-        """,
-        (client_id,),
-    )
-    if not data:
+    results = local_client_metrics({"cliente_id": client_id}, limit=1)
+    if not results:
         raise HTTPException(status_code=404, detail="Cliente não encontrado.")
-    return data
+    return results[0]
 
 
 @app.get("/api/clients/{client_id}/history")
@@ -565,7 +578,22 @@ def client_history(client_id: int):
 def client_orders(client_id: int):
     if supabase_api.enabled():
         return supabase_store.client_orders(client_id)
-    return []
+    return rows(
+        """
+        SELECT p.numero AS pedido, nf.numero AS nota_fiscal,
+               COALESCE(nf.data_faturamento, p.data_faturamento, p.data_inclusao) AS data_faturamento,
+               pr.codigo AS codigo_produto, pr.descricao AS produto, pr.familia,
+               i.quantidade, i.valor_unitario, i.total_mercadoria,
+               nf.total_nota AS total_nota_fiscal
+        FROM itens_pedido i
+        JOIN pedidos p ON p.id = i.pedido_id
+        JOIN produtos pr ON pr.id = i.produto_id
+        LEFT JOIN notas_fiscais nf ON nf.id = i.nota_fiscal_id
+        WHERE p.cliente_id = ?
+        ORDER BY data_faturamento DESC, p.numero DESC
+        """,
+        (client_id,),
+    )
 
 
 @app.get("/api/orders")
@@ -585,6 +613,20 @@ def orders(
         return supabase_store.orders({"start": start, "end": end, "cliente": cliente, "produto": produto, "vendedor": vendedor, "cidade": cidade, "estado": estado, "familia": familia, "status": status}, limit=limit)
 
     where, params = filter_clause(start, end, cliente, produto, vendedor, cidade, estado, familia)
+    if status:
+        eligible_ids = [
+            r["id"]
+            for r in local_client_metrics(
+                {"start": start, "end": end, "cliente": cliente, "produto": produto, "vendedor": vendedor, "cidade": cidade, "estado": estado, "familia": familia},
+                only_status=status,
+                limit=1_000_000,
+            )
+        ]
+        if not eligible_ids:
+            return []
+        clause = f"c.id IN ({','.join('?' for _ in eligible_ids)})"
+        where = (where + " AND " + clause) if where else " WHERE " + clause
+        params = params + eligible_ids
     params.append(limit)
     return rows(
         f"""
@@ -634,11 +676,7 @@ def products(
         }
         return supabase_store.products(q=q, filters=filters, limit=limit)
 
-    where = ""
-    params = []
-    if q:
-        where = "WHERE pr.descricao LIKE ? OR pr.codigo LIKE ? OR pr.familia LIKE ?"
-        params = [f"%{q}%", f"%{q}%", f"%{q}%"]
+    where, params = filter_clause(start, end, cliente, produto or q, vendedor, cidade, estado, familia)
     params.append(limit)
     return rows(
         f"""
@@ -647,9 +685,11 @@ def products(
                SUM(i.total_mercadoria) AS valor_total,
                COUNT(DISTINCT p.cliente_id) AS clientes,
                MAX(COALESCE(p.data_faturamento, p.data_inclusao)) AS ultima_venda
-        FROM produtos pr
-        LEFT JOIN itens_pedido i ON i.produto_id = pr.id
-        LEFT JOIN pedidos p ON p.id = i.pedido_id
+        FROM itens_pedido i
+        JOIN pedidos p ON p.id = i.pedido_id
+        JOIN clientes c ON c.id = p.cliente_id
+        JOIN produtos pr ON pr.id = i.produto_id
+        LEFT JOIN notas_fiscais nf ON nf.id = i.nota_fiscal_id
         {where}
         GROUP BY pr.id
         ORDER BY quantidade_total DESC
@@ -663,7 +703,23 @@ def products(
 def product_clients(product_id: int):
     if supabase_api.enabled():
         return supabase_store.product_clients(product_id)
-    return {"produto": None, "clientes": []}
+    produto = one("SELECT id, codigo, descricao, familia FROM produtos WHERE id = ?", (product_id,))
+    clientes_rows = rows(
+        """
+        SELECT c.id, c.razao_social, c.nome_fantasia, c.cidade, c.estado,
+               SUM(i.quantidade) AS quantidade_total,
+               SUM(i.total_mercadoria) AS valor_total,
+               MAX(COALESCE(p.data_faturamento, p.data_inclusao)) AS ultima_compra
+        FROM itens_pedido i
+        JOIN pedidos p ON p.id = i.pedido_id
+        JOIN clientes c ON c.id = p.cliente_id
+        WHERE i.produto_id = ?
+        GROUP BY c.id
+        ORDER BY valor_total DESC
+        """,
+        (product_id,),
+    )
+    return {"produto": produto, "clientes": clientes_rows}
 
 
 @app.get("/api/meta")

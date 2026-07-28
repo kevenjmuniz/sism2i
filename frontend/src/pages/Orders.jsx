@@ -1,17 +1,14 @@
 import React from "react";
 import { Table } from "../components/Table";
+import { Empty } from "../components/Empty";
 import { useData } from "../hooks";
 import { money, number } from "../utils";
-
-function Empty({ text }) {
-  return <section className="panel empty">{text}</section>;
-}
 
 export function Orders({ query, refresh }) {
   const { data, loading, error } = useData(`/api/orders?${query}&limit=500`, [query, refresh]);
 
   if (loading) return <Empty text="Carregando pedidos e notas..." />;
-  if (error) return <Empty text={error} />;
+  if (error) return <Empty text={error} tone="error" />;
 
   return (
     <Table

@@ -55,3 +55,11 @@ ON pedidos(data_faturamento, data_inclusao);
 
 CREATE INDEX IF NOT EXISTS idx_itens_pedido_produto
 ON itens_pedido(pedido_id, produto_id);
+
+-- Indices adicionais para os filtros globais (cidade/estado/vendedor/familia).
+CREATE INDEX IF NOT EXISTS idx_clientes_cidade ON clientes(cidade);
+CREATE INDEX IF NOT EXISTS idx_clientes_estado ON clientes(estado);
+CREATE INDEX IF NOT EXISTS idx_pedidos_vendedor ON pedidos(vendedor);
+CREATE INDEX IF NOT EXISTS idx_produtos_familia ON produtos(familia);
+CREATE INDEX IF NOT EXISTS idx_pedidos_cliente_id ON pedidos(cliente_id);
+CREATE INDEX IF NOT EXISTS idx_itens_pedido_nota_fiscal ON itens_pedido(nota_fiscal_id);

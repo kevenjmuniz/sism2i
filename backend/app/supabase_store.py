@@ -64,6 +64,26 @@ def status_color(status):
     }.get(status, "gray")
 
 
+def status_set(status):
+    """Aceita um status único ou uma lista separada por vírgula (ex: 'Atenção,Inativo')."""
+    if not status:
+        return None
+    if isinstance(status, (set, frozenset)):
+        return status
+    return {s.strip() for s in str(status).split(",") if s.strip()}
+
+
+def compute_priority(days_without, total, ticket, avg_frequency, status):
+    """Formula unica de priorizacao, compartilhada entre o modo SQLite e o modo Supabase."""
+    return (
+        (days_without or 0) * 1.4
+        + (total / 10000)
+        + (ticket / 1500)
+        + ((90 / avg_frequency) if avg_frequency and avg_frequency > 0 else 0)
+        + status_rank(status) * 20
+    )
+
+
 def table(name, order=None):
     url = f"{supabase_api.SUPABASE_URL.rstrip('/')}/rest/v1/{name}"
     headers = {
@@ -164,8 +184,18 @@ def item_rows(filters=None):
     return rows
 
 
-def client_metrics(filters=None, q=None, limit=None, only_status=None, _rows=None):
+def client_metrics(
+    filters=None,
+    q=None,
+    limit=None,
+    only_status=None,
+    _rows=None,
+    dias_min=None,
+    dias_max=None,
+    valor_min=None,
+):
     filters = filters or {}
+    statuses = status_set(only_status)
     rows = _rows if _rows is not None else item_rows(filters)
     today = date.today()
     by_client = defaultdict(
@@ -217,13 +247,7 @@ def client_metrics(filters=None, q=None, limit=None, only_status=None, _rows=Non
         status = status_from(days_without, avg_frequency, order_count)
         top_products = sorted(entry["products"].values(), key=lambda p: p["quantidade"], reverse=True)
         product_names = ", ".join([p["produto"].get("descricao") for p in top_products[:3] if p["produto"]])
-        priority = (
-            (days_without or 0) * 1.4
-            + (entry["total"] / 10000)
-            + (ticket / 1500)
-            + ((90 / avg_frequency) if avg_frequency and avg_frequency > 0 else 0)
-            + status_rank(status) * 20
-        )
+        priority = compute_priority(days_without, entry["total"], ticket, avg_frequency, status)
         row = {
             **cliente,
             "cnpj_cpf": client_document(cliente),
@@ -239,7 +263,13 @@ def client_metrics(filters=None, q=None, limit=None, only_status=None, _rows=Non
             "produtos_recorrentes": product_names,
             "prioridade": priority,
         }
-        if only_status and row["status"] != only_status:
+        if statuses and row["status"] not in statuses:
+            continue
+        if dias_min is not None and (row["dias_sem_comprar"] is None or row["dias_sem_comprar"] < dias_min):
+            continue
+        if dias_max is not None and (row["dias_sem_comprar"] is None or row["dias_sem_comprar"] > dias_max):
+            continue
+        if valor_min is not None and row["total_comprado"] < valor_min:
             continue
         result.append(row)
 
@@ -323,8 +353,16 @@ def dashboard(filters):
     }
 
 
-def clients(q=None, filters=None, limit=50):
-    return client_metrics(filters, q=q, limit=limit)
+def clients(q=None, filters=None, limit=50, only_status=None, dias_min=None, dias_max=None, valor_min=None):
+    return client_metrics(
+        filters,
+        q=q,
+        limit=limit,
+        only_status=only_status,
+        dias_min=dias_min,
+        dias_max=dias_max,
+        valor_min=valor_min,
+    )
 
 
 def client_detail(client_id):
