@@ -22,11 +22,10 @@ def enabled():
 
 
 def _headers():
-    return {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-    }
+    headers = {"apikey": SUPABASE_KEY, "Content-Type": "application/json"}
+    if not SUPABASE_KEY.startswith(("sb_secret_", "sb_publishable_")):
+        headers["Authorization"] = f"Bearer {SUPABASE_KEY}"
+    return headers
 
 
 def table_upsert(table, payload, on_conflict, ignore=False):
