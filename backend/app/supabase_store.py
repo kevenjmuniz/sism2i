@@ -86,10 +86,7 @@ def compute_priority(days_without, total, ticket, avg_frequency, status):
 
 def table(name, order=None):
     url = f"{supabase_api.SUPABASE_URL.rstrip('/')}/rest/v1/{name}"
-    headers = {
-        "apikey": supabase_api.SUPABASE_KEY,
-        "Authorization": f"Bearer {supabase_api.SUPABASE_KEY}",
-    }
+    headers = supabase_api._headers()
     params = {"select": "*"}
     if order:
         params["order"] = order
