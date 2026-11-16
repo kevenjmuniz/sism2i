@@ -185,7 +185,7 @@ Conteudo esperado:
 
 ```env
 SUPABASE_REST_MODE=true
-SUPABASE_URL=https://nrbsmyudmezslzolmakj.supabase.co
+SUPABASE_URL=https://SEU-PROJETO.supabase.co
 SUPABASE_PUBLISHABLE_KEY=sua_publishable_key
 SUPABASE_SERVICE_ROLE_KEY=sua_service_role_key_opcional_para_importar
 AUTH_USERNAME=admin
@@ -266,3 +266,17 @@ http://127.0.0.1:8013
 - Todas as analises usam apenas o CSV/banco atual.
 - Nao ha cadastro de visitas, contatos ou observacoes.
 - O foco e leitura comercial rapida para priorizar recuperacao de clientes.
+
+## Deploy no EasyPanel
+
+Use um serviço App com fonte GitHub `kevenjmuniz/sism2i`, branch `main`,
+contexto na raiz e build pelo `Dockerfile`. Configure o proxy HTTPS para
+a porta interna `8013`. O FastAPI serve a API e o React pelo mesmo domínio.
+Use `/` para checar se a aplicação responde.
+
+Em **Environment**, configure as variáveis descritas na seção Supabase.
+Use uma senha própria e um `AUTH_SECRET` aleatório de pelo menos 32
+caracteres. Coloque as chaves do Supabase apenas no ambiente do serviço.
+O banco Supabase continua externo ao EasyPanel. A importação completa
+substitui os dados comerciais existentes. Para validar o deploy, abra o
+sistema, faça login e confira o dashboard com os dados já existentes.
